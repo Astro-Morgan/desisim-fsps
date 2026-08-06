@@ -92,6 +92,32 @@ class EMSpectrum(object):
         IOError: If the required data files are not found.
 
     """
+
+    # ⚠ MAGIC: independent Gaussian priors (mean, sigma) in log10(line/Hbeta)
+    # space for auxiliary lines that were previously hardcoded constants
+    # (see git history / handoff §1.2). No calibration data exists yet.
+    # Means are set to the log10 of the original hardcoded ratios so that
+    # the *center* of the new prior reproduces the old fixed value exactly.
+    # Sigmas are placeholder starting guesses, order-of-magnitude informed by
+    # the "sensible range" spans already documented for oiiihbeta/oiihbeta/
+    # niihbeta/siihbeta in spectrum()'s docstring (~0.6-0.7 dex range there
+    # implies sigma ~ 0.15-0.2 dex for a well-constrained optical forbidden
+    # line). [ArIII] 7135 and MgII 2796,2803 are weaker/more environmentally
+    # sensitive (MgII in particular is a resonant line whose strength is
+    # heavily modulated by outflows/AGN contribution) so their sigmas are
+    # set wider. Modeled as INDEPENDENT free parameters, not jointly with
+    # `forbidmog`, per explicit 2026-08-06 project decision: proper widths
+    # and any real covariance structure will come later from an NPE /
+    # normalizing-flow fit to real spectra, at which point this table (or
+    # `auxline_priors` passed into spectrum()) should be replaced wholesale
+    # rather than hand-tuned further.
+    AUXLINE_PRIORS = {
+        'oihbeta':    dict(mean=np.log10(0.1),  sigma=0.15),  # ⚠ MAGIC sigma
+        'siiihbeta':  dict(mean=np.log10(0.75), sigma=0.15),  # ⚠ MAGIC sigma
+        'ariiihbeta': dict(mean=np.log10(0.04), sigma=0.20),  # ⚠ MAGIC sigma
+        'mgiihbeta':  dict(mean=np.log10(0.3),  sigma=0.30),  # ⚠ MAGIC sigma
+    }
+
     def __init__(self, minwave=3650.0, maxwave=7075.0, cdelt_kms=20.0, log10wave=None,
                  include_mgii=False):
 
@@ -149,6 +175,8 @@ class EMSpectrum(object):
 
     def spectrum(self, oiiihbeta=None, oiihbeta=None, niihbeta=None,
                  siihbeta=None, oiidoublet=0.73, siidoublet=1.3,
+                 oihbeta=None, siiihbeta=None, ariiihbeta=None, mgiihbeta=None,
+                 vary_auxlines=False, auxline_priors=None,
                  linesigma=75.0, zshift=0.0, oiiflux=None, hbetaflux=None,
                  seed=None):
         """Build the actual emission-line spectrum.
@@ -188,6 +216,34 @@ class EMSpectrum(object):
                 (default 0.73).
             siidoublet (float, optional): Desired [SII] 6716/6731 doublet ratio
                 (default 1.3).
+            oihbeta (float, optional): Desired [OI] 6300/H-beta line-ratio
+                (linear, not log). Default None: if vary_auxlines is False
+                (default), resolves to the legacy fixed constant 0.1 exactly.
+                If vary_auxlines is True, resolves to a draw from
+                AUXLINE_PRIORS['oihbeta'] instead. Passing an explicit float
+                always uses that value exactly, regardless of vary_auxlines.
+            siiihbeta (float, optional): Desired [SIII] 9532/H-beta line-ratio
+                (linear). Same None/vary_auxlines/explicit-value semantics as
+                oihbeta (legacy fixed constant: 0.75).
+            ariiihbeta (float, optional): Desired [ArIII] 7135/H-beta
+                line-ratio (linear). Same semantics as oihbeta (legacy fixed
+                constant: 0.04).
+            mgiihbeta (float, optional): Desired MgII 2796/H-beta line-ratio
+                (linear). Only used if include_mgii=True was passed to
+                __init__. Same semantics as oihbeta (legacy fixed constant:
+                0.3).
+            vary_auxlines (bool, optional): If True, any of oihbeta,
+                siiihbeta, ariiihbeta, mgiihbeta left at their default (None)
+                are drawn independently from AUXLINE_PRIORS instead of using
+                the legacy fixed constants (default False, i.e. legacy
+                behavior: no draw, fixed constants used). This flag exists so
+                that calling spectrum() with no new arguments reproduces the
+                pre-existing behavior exactly.
+            auxline_priors (dict, optional): Override AUXLINE_PRIORS (e.g.
+                with priors later calibrated via NPE/normalizing-flow on real
+                spectra). Must provide the same four keys with 'mean'/'sigma'
+                in log10(line/Hbeta) space. Default None uses
+                self.AUXLINE_PRIORS.
             linesigma (float, optional): Intrinsic emission-line velocity width/sigma
                 (default 75 km/s).  A sensible range is [30-150].
             zshift (float, optional): Perturb the emission lines from their laboratory
@@ -249,27 +305,55 @@ class EMSpectrum(object):
         line['ratio'][is6716] = 10**siihbeta # [SII]/Hbeta
         line['ratio'][is6731] = line['ratio'][is6716]/siidoublet
 
-        # Hack! For the following lines use constant ratios relative to H-beta--
+        # [OI], [SIII], [ArIII], and MgII used to be hardcoded constants here
+        # (flagged "Hack!" by the original author). They are now independent
+        # tunable parameters (see AUXLINE_PRIORS above); vary_auxlines=False
+        # (the default) reproduces the old fixed-constant behavior exactly.
+        if auxline_priors is None:
+            auxline_priors = self.AUXLINE_PRIORS
+
+        def _resolve_auxline(explicit, key, legacy_value):
+            if explicit is not None:
+                return explicit
+            if vary_auxlines:
+                prior = auxline_priors[key]
+                return 10**rand.normal(prior['mean'], prior['sigma'])
+            return legacy_value
+
+        oihbeta    = _resolve_auxline(oihbeta,    'oihbeta',    0.1)
+        siiihbeta  = _resolve_auxline(siiihbeta,  'siiihbeta',  0.75)
+        ariiihbeta = _resolve_auxline(ariiihbeta, 'ariiihbeta', 0.04)
 
         # Normalize [OI]
-        line['ratio'][is6300] = 0.1 # [OI]6300/Hbeta
-        line['ratio'][is6363] = line['ratio'][is6300]/self.oidoublet 
+        line['ratio'][is6300] = oihbeta # [OI]6300/Hbeta
+        line['ratio'][is6363] = line['ratio'][is6300]/self.oidoublet
 
         # Normalize [SIII]
-        line['ratio'][is9532] = 0.75 # [SIII]9532/Hbeta
+        line['ratio'][is9532] = siiihbeta # [SIII]9532/Hbeta
         line['ratio'][is9069] = line['ratio'][is9532]/self.siiidoublet
-        
+
         # Normalize [ArIII]
-        line['ratio'][is7135] = 0.04 # [ArIII]7135/Hbeta
+        line['ratio'][is7135] = ariiihbeta # [ArIII]7135/Hbeta
         line['ratio'][is7751] = line['ratio'][is7135]/self.ariiidoublet
 
         # Normalize MgII
         if self.include_mgii:
+            mgiihbeta = _resolve_auxline(mgiihbeta, 'mgiihbeta', 0.3)
+
             is2800a = np.where(line['name'] == 'MgII_2800a')[0]
             is2800b = np.where(line['name'] == 'MgII_2800b')[0]
 
-            line['ratio'][is2800a] = 0.3 # MgII2796/Hbeta
-            line['ratio'][is2800a] = line['ratio'][is2800a]/self.mgiidoublet
+            line['ratio'][is2800a] = mgiihbeta # MgII2796/Hbeta
+            # NOTE: pre-existing bug fixed here. The original code re-assigned
+            # is2800a a second time (dividing it by itself, a no-op given
+            # mgiidoublet=1.0) instead of setting is2800b, so MgII 2803 was
+            # silently left at its Column-init default ratio of 1.0 rather
+            # than being derived from the 2796 ratio. Fixed to assign
+            # is2800b as clearly intended by the comment/variable naming.
+            # Flagging per this project's "flag, don't silently resolve"
+            # convention rather than treating this as part of the tunable
+            # ratio feature itself.
+            line['ratio'][is2800b] = line['ratio'][is2800a]/self.mgiidoublet
         
         ## Normalize [NeIII] 3869.
         #coeff = np.asarray([1.0876,-1.1647])

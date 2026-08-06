@@ -2,12 +2,125 @@ import os
 import unittest
 import numpy as np
 from astropy.table import Table, Column
-from desisim.templates import ELG, LRG, QSO, BGS, STAR, STD, MWS_STAR, WD, SIMQSO
+from desisim.templates import ELG, LRG, QSO, BGS, STAR, STD, MWS_STAR, WD, SIMQSO, EMSpectrum
 from desisim import lya_mock_p1d as lyamock
 
 desimodel_data_available = 'DESIMODEL' in os.environ
 desi_templates_available = 'DESI_ROOT' in os.environ
 desi_basis_templates_available = 'DESI_BASIS_TEMPLATES' in os.environ
+
+
+class TestEMSpectrum(unittest.TestCase):
+    '''Unit tests for EMSpectrum, in particular the newly-tunable [OI],
+    [SIII], [ArIII], and MgII auxiliary line ratios (handoff Sec 1.2).
+    None of these require $DESI_BASIS_TEMPLATES / $DESIMODEL: EMSpectrum
+    only reads package-bundled data files.
+    '''
+
+    def setUp(self):
+        # Wide enough to cover every line touched by these tests (MgII 2796
+        # through [SIII] 9532), since spectrum() only returns lines that fall
+        # within the constructor's [minwave, maxwave] window.
+        self.em = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_mgii=True)
+        self.em_nomgii = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_mgii=False)
+        # Fixed forbidden-line ratios so tests are deterministic and don't
+        # depend on the forbidmog draw.
+        self.fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
+
+    def _ratio(self, line_table, name):
+        row = line_table[line_table['name'] == name]
+        self.assertEqual(len(row), 1, f'expected exactly one {name} row')
+        return float(row['ratio'][0])
+
+    def test_legacy_default_reproduces_fixed_constants(self):
+        '''Regression test: calling spectrum() with none of the new
+        arguments must reproduce the pre-existing hardcoded ratios exactly
+        (0.1, 0.75, 0.04 for OI/SIII/ArIII; MgII 2796=0.3 and, after the
+        accompanying bugfix, MgII 2803=0.3/mgiidoublet).'''
+        _, _, line = self.em.spectrum(seed=1, **self.fixed_ratios)
+        self.assertAlmostEqual(self._ratio(line, '[OI]_6300'), 0.1, places=6)
+        self.assertAlmostEqual(self._ratio(line, '[OI]_6363'), 0.1 / self.em.oidoublet, places=6)
+        self.assertAlmostEqual(self._ratio(line, '[SIII]_9532'), 0.75, places=6)
+        self.assertAlmostEqual(self._ratio(line, '[SIII]_9069'), 0.75 / self.em.siiidoublet, places=6)
+        self.assertAlmostEqual(self._ratio(line, '[ArIII]_7135'), 0.04, places=6)
+        self.assertAlmostEqual(self._ratio(line, '[ArIII]_7751'), 0.04 / self.em.ariiidoublet, places=6)
+        self.assertAlmostEqual(self._ratio(line, 'MgII_2800a'), 0.3, places=6)
+
+    def test_mgii_2803_bugfix(self):
+        '''Pre-existing bug: MgII 2803 (is2800b) was never assigned and
+        silently kept the Column-init default ratio of 1.0 instead of being
+        derived from the 2796 ratio via mgiidoublet. Confirm the fix.'''
+        _, _, line = self.em.spectrum(seed=1, **self.fixed_ratios)
+        ratio_2796 = self._ratio(line, 'MgII_2800a')
+        ratio_2803 = self._ratio(line, 'MgII_2800b')
+        self.assertNotEqual(ratio_2803, 1.0)
+        self.assertAlmostEqual(ratio_2803, ratio_2796 / self.em.mgiidoublet, places=10)
+
+    def test_explicit_auxline_value_always_wins(self):
+        '''An explicit float always overrides the draw/legacy-constant,
+        regardless of vary_auxlines.'''
+        for vary in (False, True):
+            _, _, line = self.em.spectrum(seed=1, oihbeta=0.5, siiihbeta=0.6,
+                                           ariiihbeta=0.02, mgiihbeta=0.9,
+                                           vary_auxlines=vary, **self.fixed_ratios)
+            self.assertAlmostEqual(self._ratio(line, '[OI]_6300'), 0.5, places=6)
+            self.assertAlmostEqual(self._ratio(line, '[SIII]_9532'), 0.6, places=6)
+            self.assertAlmostEqual(self._ratio(line, '[ArIII]_7135'), 0.02, places=6)
+            self.assertAlmostEqual(self._ratio(line, 'MgII_2800a'), 0.9, places=6)
+
+    def test_vary_auxlines_draws_and_is_seed_reproducible(self):
+        '''With vary_auxlines=True, repeated draws with different seeds
+        should (almost surely) differ, and the same seed should reproduce
+        the same draw exactly.'''
+        _, _, lineA = self.em.spectrum(seed=1, vary_auxlines=True, **self.fixed_ratios)
+        _, _, lineB = self.em.spectrum(seed=2, vary_auxlines=True, **self.fixed_ratios)
+        _, _, lineA2 = self.em.spectrum(seed=1, vary_auxlines=True, **self.fixed_ratios)
+        self.assertNotEqual(self._ratio(lineA, '[OI]_6300'), self._ratio(lineB, '[OI]_6300'))
+        self.assertEqual(self._ratio(lineA, '[OI]_6300'), self._ratio(lineA2, '[OI]_6300'))
+
+    def test_vary_auxlines_zero_sigma_collapses_to_mean(self):
+        '''Edge case: sigma=0 in the prior must deterministically reproduce
+        exp10(mean), with no scatter regardless of seed.'''
+        zero_sigma_priors = {
+            'oihbeta':    dict(mean=np.log10(0.1),  sigma=0.0),
+            'siiihbeta':  dict(mean=np.log10(0.75), sigma=0.0),
+            'ariiihbeta': dict(mean=np.log10(0.04), sigma=0.0),
+            'mgiihbeta':  dict(mean=np.log10(0.3),  sigma=0.0),
+        }
+        _, _, line1 = self.em.spectrum(seed=1, vary_auxlines=True,
+                                        auxline_priors=zero_sigma_priors, **self.fixed_ratios)
+        _, _, line2 = self.em.spectrum(seed=99, vary_auxlines=True,
+                                        auxline_priors=zero_sigma_priors, **self.fixed_ratios)
+        self.assertAlmostEqual(self._ratio(line1, '[OI]_6300'), 0.1, places=6)
+        self.assertAlmostEqual(self._ratio(line2, '[OI]_6300'), 0.1, places=6)
+
+    def test_auxline_priors_boundary_values_do_not_error(self):
+        '''Edge case: extreme (but finite) explicit ratio values, including
+        zero, must not raise or produce non-finite output.'''
+        for val in (0.0, 1e-6, 10.0):
+            emspec, wave, line = self.em.spectrum(seed=1, oihbeta=val, siiihbeta=val,
+                                                   ariiihbeta=val, mgiihbeta=val,
+                                                   **self.fixed_ratios)
+            self.assertTrue(np.all(np.isfinite(emspec)))
+            self.assertTrue(np.all(np.isfinite(wave)))
+
+    def test_mgii_ignored_when_include_mgii_false(self):
+        '''mgiihbeta must have no effect and no MgII rows should appear when
+        include_mgii=False (default), matching legacy behavior.'''
+        _, _, line = self.em_nomgii.spectrum(seed=1, mgiihbeta=0.9, vary_auxlines=True,
+                                              **self.fixed_ratios)
+        self.assertEqual(len(line[line['name'] == 'MgII_2800a']), 0)
+        self.assertEqual(len(line[line['name'] == 'MgII_2800b']), 0)
+
+    def test_output_shape_and_no_nan(self):
+        '''Smoke test: output array is well-formed regardless of
+        vary_auxlines.'''
+        for vary in (False, True):
+            emspec, wave, line = self.em.spectrum(seed=1, vary_auxlines=vary, **self.fixed_ratios)
+            self.assertEqual(emspec.shape, wave.shape)
+            self.assertTrue(np.all(np.isfinite(emspec)))
+            self.assertTrue(np.all(emspec >= 0))
+
 
 class TestTemplates(unittest.TestCase):
 

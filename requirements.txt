@@ -28,3 +28,9 @@ git+https://github.com/desihub/desitarget.git@main#egg=desitarget
 git+https://github.com/desihub/specsim.git@main#egg=specsim
 # simqso install script requires numpy, so install separately.
 # git+https://github.com/imcgreer/simqso.git@v1.2.4#egg=simqso
+
+# Optional: enables the torch/CUDA-accelerated backend for EMSpectrum line
+# profile construction (see py/desisim/torch_utils.py). Soft dependency --
+# desisim works fine without it (falls back to the numpy reference
+# implementation); install for speed, especially on a GPU node.
+torch

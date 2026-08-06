@@ -53,6 +53,102 @@ def _check_star_properties(star_properties, WD=False):
             required_cols))
         raise ValueError
 
+def _use_torch_backend(backend):
+    """Resolve the 'auto'/'torch'/'numpy' backend argument used by
+    EMSpectrum.spectrum() into a boolean: whether to run the
+    line-profile-construction step through the torch backend.
+
+    'auto' (the default) prefers torch whenever it's importable, silently
+    falling back to the numpy reference implementation otherwise -- this is
+    what makes the torch backend the *default* accelerated path (per the
+    project's "move to pytorch wherever possible" direction) while still
+    working in environments where torch isn't installed at all.
+    """
+    from desisim.torch_utils import torch_available
+    if backend == 'numpy':
+        return False
+    if backend == 'torch':
+        if not torch_available():
+            raise ImportError("backend='torch' was explicitly requested but PyTorch is not installed.")
+        return True
+    if backend == 'auto':
+        return torch_available()
+    raise ValueError("backend must be one of 'auto', 'torch', 'numpy'; got {!r}".format(backend))
+
+
+def _lines_to_spectrum_numpy(log10wave, linecenters, norm, log10sigma):
+    """Reference (numpy) implementation of summing Gaussian emission-line
+    profiles onto a log10-wavelength grid, windowed to +/-6*log10sigma per
+    line (matches the original per-line Python loop this replaces).
+
+    Parameters
+    ----------
+    log10wave : ndarray [npix]
+        Output log10(wavelength) grid.
+    linecenters : ndarray [nline]
+        log10(observed-frame line center wavelength) for each line.
+    norm : ndarray [nline]
+        Peak-normalization amplitude for each line, i.e.
+        flux/wave/ln(10) / (sqrt(2*pi)*log10sigma) -- this is exactly the
+        'amp' column value written into the returned line table.
+    log10sigma : float
+        Common line-width [dex] shared by all lines (EMSpectrum only
+        supports a single linesigma per call).
+
+    Returns
+    -------
+    ndarray [npix]
+    """
+    import numpy as np
+    emspec = np.zeros_like(log10wave)
+    for center, n in zip(linecenters, norm):
+        jj = np.abs(log10wave - center) < 6 * log10sigma
+        emspec[jj] += n * np.exp(-0.5 * (log10wave[jj] - center) ** 2 / log10sigma ** 2)
+    return emspec
+
+
+def _lines_to_spectrum_torch(log10wave, linecenters, norm, log10sigma, device=None, dtype=None):
+    """Vectorized/batched torch equivalent of _lines_to_spectrum_numpy,
+    evaluated on `device` (auto CPU/CUDA-detected via
+    desisim.torch_utils.get_device if device is None).
+
+    Numerically equivalent to _lines_to_spectrum_numpy to floating-point
+    summation-order precision (both apply the identical +/-6*log10sigma
+    window and the identical closed-form Gaussian; see
+    test_templates.py::TestEMSpectrumBackends for the equivalence test).
+    Runs as a single batched [nline, npix] tensor op rather than a Python
+    loop over lines, which is the actual point of this backend: for large
+    nline*npix (e.g. once Sec 1.3's additional narrow+broad lines land, or
+    when batching many spectra) this is dramatically faster on GPU than the
+    per-line Python loop, and still faster than numpy on CPU.
+    """
+    import numpy as np
+    import torch
+    from desisim.torch_utils import get_device
+
+    dev = get_device(device)
+    dt = dtype if dtype is not None else torch.float64
+
+    wave_t = torch.as_tensor(np.asarray(log10wave), device=dev, dtype=dt).unsqueeze(0)      # [1, npix]
+    centers_t = torch.as_tensor(np.asarray(linecenters), device=dev, dtype=dt).unsqueeze(1)  # [nline, 1]
+    norm_t = torch.as_tensor(np.asarray(norm), device=dev, dtype=dt).unsqueeze(1)             # [nline, 1]
+
+    dist = wave_t - centers_t                                    # [nline, npix]
+    mask = dist.abs() < (6.0 * log10sigma)
+    zero = torch.zeros((), device=dev, dtype=dt)
+    profile = torch.where(mask, norm_t * torch.exp(-0.5 * (dist / log10sigma) ** 2), zero)
+    emspec = profile.sum(dim=0)
+    # NOTE: intentionally not using Tensor.numpy() here. That zero-copy
+    # bridge relies on a numpy C-API ABI that older torch builds (compiled
+    # against numpy<2) are incompatible with under numpy>=2 (raises
+    # "RuntimeError: Numpy is not available" -- a real, environment-specific
+    # ABI mismatch hit while developing this, not a hypothetical). Going
+    # through a plain Python list sidesteps the C-API bridge entirely at the
+    # cost of one harmless copy of an [npix]-sized array (negligible next to
+    # the actual [nline, npix] compute this function exists to accelerate).
+    return np.asarray(emspec.detach().to('cpu').tolist(), dtype=np.float64)
+
+
 class EMSpectrum(object):
     """Construct a complete nebular emission-line spectrum.
 
@@ -178,7 +274,7 @@ class EMSpectrum(object):
                  oihbeta=None, siiihbeta=None, ariiihbeta=None, mgiihbeta=None,
                  vary_auxlines=False, auxline_priors=None,
                  linesigma=75.0, zshift=0.0, oiiflux=None, hbetaflux=None,
-                 seed=None):
+                 seed=None, backend='auto', device=None, dtype=None):
         """Build the actual emission-line spectrum.
 
         Building the emission-line spectrum involves three main steps.  First,
@@ -253,6 +349,26 @@ class EMSpectrum(object):
             hbetaflux (float, optional): Normalize the emission-line spectrum to this
                 integrated H-beta emission-line flux (default None).
             seed (int, optional): input seed for the random numbers.
+            backend (str, optional): One of 'auto' (default), 'torch', or
+                'numpy'. Controls how the per-line Gaussian profile
+                construction step is computed. 'auto' uses PyTorch
+                (CUDA-accelerated if available, else CPU) when it's
+                installed, and transparently falls back to the numpy
+                reference implementation if it isn't -- this is what makes
+                torch the default accelerated path project-wide without
+                requiring torch as a hard dependency. 'torch' forces the
+                torch backend (raising ImportError if torch isn't
+                installed); 'numpy' forces the original reference loop.
+                Both backends are numerically equivalent (see
+                _lines_to_spectrum_numpy/_lines_to_spectrum_torch and their
+                equivalence test) so switching backends does not change
+                scientific results, only performance.
+            device (str or torch.device, optional): Passed through to the
+                torch backend (ignored for 'numpy'). Default None
+                auto-detects CUDA if available, else CPU.
+            dtype (torch.dtype, optional): Passed through to the torch
+                backend (ignored for 'numpy'). Default None uses
+                torch.float64 to match numpy's default precision.
 
         Returns:
             Tuple of (emspec, wave, line), where
@@ -395,15 +511,23 @@ class EMSpectrum(object):
                           (loglinewave < self.log10wave.max()) )[0]
         if len(these) > 0:
             theseline = line[these]
-            for ii in range(len(theseline)):
-                amp = theseline['flux'][ii] / theseline['wave'][ii] / np.log(10) # line-amplitude [erg/s/cm2/A]
-                thislinewave = np.log10(theseline['wave'][ii] * (1.0 + zshift))
-                theseline['amp'][ii] = amp / (np.sqrt(2.0 * np.pi) * log10sigma)  # [erg/s/A]
 
-                # Construct the spectrum [erg/s/cm2/A, rest]
-                jj = np.abs( self.log10wave - thislinewave ) < 6 * log10sigma
-                emspec[jj] += amp * np.exp(-0.5 * (self.log10wave[jj]-thislinewave)**2 / log10sigma**2) \
-                              / (np.sqrt(2.0 * np.pi) * log10sigma)
+            # Per-line quantities are O(nline), always cheap in plain numpy
+            # regardless of backend.
+            amp = theseline['flux'].data / theseline['wave'].data / np.log(10) # line-amplitude [erg/s/cm2/A]
+            linecenters = np.log10(theseline['wave'].data * (1.0 + zshift))
+            norm = amp / (np.sqrt(2.0 * np.pi) * log10sigma) # [erg/s/A]
+            theseline['amp'] = norm
+
+            # Construct the spectrum [erg/s/cm2/A, rest]. This is the O(nline
+            # * npix) step, dispatched to the torch backend (CUDA if
+            # available) by default; see backend/device/dtype docstrings
+            # above and _lines_to_spectrum_{numpy,torch}.
+            if _use_torch_backend(backend):
+                emspec = _lines_to_spectrum_torch(self.log10wave, linecenters, norm, log10sigma,
+                                                   device=device, dtype=dtype)
+            else:
+                emspec = _lines_to_spectrum_numpy(self.log10wave, linecenters, norm, log10sigma)
         else:
             theseline = Table()
 

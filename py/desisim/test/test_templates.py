@@ -122,6 +122,100 @@ class TestEMSpectrum(unittest.TestCase):
             self.assertTrue(np.all(emspec >= 0))
 
 
+class TestEMSpectrumBackends(unittest.TestCase):
+    '''Equivalence tests between the numpy reference and torch-accelerated
+    backends for EMSpectrum's line-profile construction (handoff's new
+    "port to pytorch wherever possible, auto CUDA detection" requirement,
+    2026-08-06). backend='auto' is now the *default*, so these tests are
+    what proves that default change doesn't silently alter results for
+    existing callers -- both backends must agree to floating-point
+    precision, not just "close enough".
+    '''
+
+    def setUp(self):
+        self.em = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_mgii=True)
+        self.kwargs = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3, seed=1)
+
+    def test_torch_is_actually_available_in_this_environment(self):
+        '''Sanity check on the test environment itself: if this fails, the
+        rest of this class's assertions about the 'auto' backend selecting
+        torch are not being exercised at all.'''
+        from desisim.torch_utils import torch_available
+        self.assertTrue(torch_available(), 'PyTorch is not installed; the '
+                         'auto/torch backend paths below would silently no-op '
+                         'to numpy and this test class would not be testing '
+                         'what it claims to.')
+
+    def test_numpy_and_torch_backends_agree(self):
+        emspec_np, wave_np, _ = self.em.spectrum(backend='numpy', **self.kwargs)
+        emspec_torch, wave_torch, _ = self.em.spectrum(backend='torch', **self.kwargs)
+        np.testing.assert_array_equal(wave_np, wave_torch)
+        np.testing.assert_allclose(emspec_np, emspec_torch, rtol=1e-9, atol=1e-30)
+
+    def test_auto_backend_matches_explicit_numpy_backend(self):
+        '''This is the actual backward-compatibility guarantee: calling
+        spectrum() with none of the new backend/device/dtype arguments
+        (i.e. the exact old call signature) must give the same physical
+        result as the old numpy-only code did, even though it now silently
+        routes through torch by default.'''
+        emspec_default, _, _ = self.em.spectrum(**self.kwargs)  # backend='auto' implicitly
+        emspec_numpy, _, _ = self.em.spectrum(backend='numpy', **self.kwargs)
+        np.testing.assert_allclose(emspec_default, emspec_numpy, rtol=1e-9, atol=1e-30)
+
+    def test_auto_prefers_torch_when_available(self):
+        '''auto should behave identically to explicitly requesting torch
+        when torch is installed (which test_torch_is_actually_available_in_this_environment
+        confirms it is here).'''
+        emspec_auto, _, _ = self.em.spectrum(**self.kwargs)
+        emspec_torch, _, _ = self.em.spectrum(backend='torch', **self.kwargs)
+        np.testing.assert_array_equal(emspec_auto, emspec_torch)
+
+    def test_auto_falls_back_to_numpy_when_torch_unavailable(self):
+        '''Simulate an environment without torch installed (monkeypatching
+        desisim.templates.torch_available rather than actually uninstalling
+        torch) and confirm auto still produces the correct, numpy-equivalent
+        result rather than erroring.'''
+        import desisim.templates as tmpl
+        import desisim.torch_utils as torch_utils
+        original = torch_utils.torch_available
+        torch_utils.torch_available = lambda: False
+        try:
+            emspec_fallback, _, _ = self.em.spectrum(**self.kwargs)
+        finally:
+            torch_utils.torch_available = original
+        emspec_numpy, _, _ = self.em.spectrum(backend='numpy', **self.kwargs)
+        np.testing.assert_array_equal(emspec_fallback, emspec_numpy)
+
+    def test_torch_backend_raises_if_torch_unavailable_and_explicitly_requested(self):
+        import desisim.torch_utils as torch_utils
+        original = torch_utils.torch_available
+        torch_utils.torch_available = lambda: False
+        try:
+            with self.assertRaises(ImportError):
+                self.em.spectrum(backend='torch', **self.kwargs)
+        finally:
+            torch_utils.torch_available = original
+
+    def test_invalid_backend_raises(self):
+        with self.assertRaises(ValueError):
+            self.em.spectrum(backend='not-a-real-backend', **self.kwargs)
+
+    def test_explicit_cpu_device_matches_auto(self):
+        emspec_cpu, _, _ = self.em.spectrum(backend='torch', device='cpu', **self.kwargs)
+        emspec_auto, _, _ = self.em.spectrum(**self.kwargs)
+        np.testing.assert_array_equal(emspec_cpu, emspec_auto)
+
+    def test_torch_backend_handles_zero_lines_in_window(self):
+        '''Edge case: a wavelength window with no lines in it must not
+        error in either backend (this is the em.spectrum "theseline empty"
+        branch, which never calls into the backend at all -- confirm that
+        explicitly rather than assuming).'''
+        narrow_em = EMSpectrum(minwave=4990.0, maxwave=4991.0)  # no lines in this tiny window
+        emspec, wave, line = narrow_em.spectrum(backend='torch', **self.kwargs)
+        self.assertTrue(np.all(emspec == 0))
+        self.assertEqual(len(line), 0)
+
+
 class TestTemplates(unittest.TestCase):
 
     def setUp(self):

@@ -55,3 +55,15 @@ Paepsilon      9548.591    0.03656680
  HeI_6678      6679.994    0.03360660
  HeI_7065      7067.198    0.02173860
 HeI_10830      10833.22     0.2404832
+# Added 2026-08-06 (handoff Sec 1.3): HeII 4686, the classic high-ionization
+# AGN/Wolf-Rayet recombination line. Vacuum wavelength is a best-available
+# estimate (see forbidden_lines.ecsv's added-lines note re: needing a final
+# cross-check). Unlike the rest of this file's lines, HeII_4686's ratio is
+# NOT used directly from this table -- EMSpectrum.spectrum() overrides it
+# at runtime (both narrow and broad-AGN-like components), same treatment
+# as the [OI]/[SIII]/[ArIII]/MgII tunable lines, since a single fixed
+# case-B-style ratio would defeat the point of this being tunable. The
+# placeholder ratio value here is never read. Row is only present in
+# EMSpectrum.line when include_new_lines=True was passed to __init__
+# (removed otherwise), so default (opt-out) behavior is unaffected.
+  HeII_4686      4687.02     1.0

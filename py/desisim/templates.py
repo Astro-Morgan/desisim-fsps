@@ -214,8 +214,67 @@ class EMSpectrum(object):
         'mgiihbeta':  dict(mean=np.log10(0.3),  sigma=0.30),  # ⚠ MAGIC sigma
     }
 
+    # Handoff Sec 1.3: seven newly-added lines, each with an independent
+    # narrow (nebular) AND broad (AGN-like) tunable component, per explicit
+    # project requirement ("every newly added line needs both... not a
+    # single fixed-width line"). NEW_LINE_NAMES must match the 'name'
+    # column values in forbidden_lines.ecsv/recombination_lines.ecsv
+    # exactly (see those files' 2026-08-06 additions).
+    #
+    # ⚠ MAGIC priors, all independent free parameters (no joint covariance,
+    # no shared latent draw with forbidmog or AUXLINE_PRIORS), same
+    # "NPE-calibrated later" status as AUXLINE_PRIORS:
+    #  - narrow_mean/narrow_sigma: log10(narrow-component / Hbeta), central
+    #    values order-of-magnitude informed by typical star-forming/HII
+    #    region line ratios (e.g. [NeIII]3869/Hbeta ~0.1-0.2 in moderately
+    #    high-ionization HII regions; auroral lines [OIII]4363, [NII]5755,
+    #    [SII]4068,4076 are intrinsically weak, ~1-3% of Hbeta in typical
+    #    conditions; HeII4686 narrow component is weak outside AGN/WR
+    #    contexts). [NeIII]_3968 is fixed at the standard ~0.3x [NeIII]_3869
+    #    doublet ratio as its mean (companion line, not independently
+    #    variable in real atomic physics -- unlike the other six, which
+    #    really are independent transitions).
+    #  - broad_mean/broad_sigma: log10(broad-component / Hbeta). Centered
+    #    much weaker than narrow by default (most objects are not AGN), but
+    #    wide sigma so AGN-like objects with strong broad components remain
+    #    reachable (same recall-over-precision philosophy as Sec 1.4).
+    #    HeII4686 gets the largest broad_mean since it's the standard
+    #    high-ionization AGN/WR broad-line diagnostic; the others get
+    #    broad capability because the project explicitly requires it for
+    #    every new line, not because real spectra typically show strong
+    #    broad components on auroral lines.
+    NEW_LINE_NAMES = ['[NeIII]_3869', '[NeIII]_3968', '[OIII]_4363',
+                       'HeII_4686', '[NII]_5755', '[SII]_4068', '[SII]_4076']
+    NEW_LINE_PRIORS = {
+        '[NeIII]_3869': dict(narrow_mean=np.log10(0.15),   narrow_sigma=0.30,
+                              broad_mean=np.log10(0.02),    broad_sigma=0.50),
+        '[NeIII]_3968': dict(narrow_mean=np.log10(0.15 * 0.3), narrow_sigma=0.30,
+                              broad_mean=np.log10(0.02 * 0.3), broad_sigma=0.50),
+        '[OIII]_4363':  dict(narrow_mean=np.log10(0.02),   narrow_sigma=0.40,
+                              broad_mean=np.log10(0.005),   broad_sigma=0.50),
+        'HeII_4686':    dict(narrow_mean=np.log10(0.02),   narrow_sigma=0.40,
+                              broad_mean=np.log10(0.05),    broad_sigma=0.60),
+        '[NII]_5755':   dict(narrow_mean=np.log10(0.01),   narrow_sigma=0.40,
+                              broad_mean=np.log10(0.002),   broad_sigma=0.50),
+        '[SII]_4068':   dict(narrow_mean=np.log10(0.015),  narrow_sigma=0.35,
+                              broad_mean=np.log10(0.003),   broad_sigma=0.50),
+        '[SII]_4076':   dict(narrow_mean=np.log10(0.010),  narrow_sigma=0.35,
+                              broad_mean=np.log10(0.002),   broad_sigma=0.50),
+    }
+    # ⚠ MAGIC: broad-line-region velocity SIGMA [km/s] is shared across all
+    # seven broad components in a given spectrum() call, rather than each
+    # line getting its own independent width. This is a deliberate
+    # simplification, not an oversight: real AGN broad-line regions have a
+    # single characteristic BLR kinematic scale that broad components of
+    # different lines share (they're all tracing the same photoionized
+    # gas kinematics), so one shared parameter per object is more
+    # physically defensible than seven independent ones, and keeps the
+    # parameter count from exploding. Range is a rough FWHM~1000-10000 km/s
+    # (typical AGN broad-line FWHM) converted to sigma via FWHM/2.355.
+    BROADSIGMA_RANGE_KMS = (425.0, 4250.0)  # ⚠ MAGIC
+
     def __init__(self, minwave=3650.0, maxwave=7075.0, cdelt_kms=20.0, log10wave=None,
-                 include_mgii=False):
+                 include_mgii=False, include_new_lines=False):
 
         from importlib import resources
         from astropy.table import Table, Column, vstack
@@ -252,7 +311,17 @@ class EMSpectrum(object):
         if not self.include_mgii:
             forbiddata.remove_rows(np.where(forbiddata['name'] == 'MgII_2800a')[0])
             forbiddata.remove_rows(np.where(forbiddata['name'] == 'MgII_2800b')[0])
-            
+
+        # Handoff Sec 1.3: seven new lines (narrow + broad AGN-like tunable
+        # components), opt-in and removed by default exactly like MgII above
+        # -- so every existing caller's default (opt-out) output is
+        # unaffected.
+        self.include_new_lines = include_new_lines
+        if not self.include_new_lines:
+            for _newname in self.NEW_LINE_NAMES:
+                recombdata.remove_rows(np.where(recombdata['name'] == _newname)[0])
+                forbiddata.remove_rows(np.where(forbiddata['name'] == _newname)[0])
+
         line = vstack([recombdata,forbiddata], metadata_conflicts='silent')
 
         nline = len(line)
@@ -273,6 +342,8 @@ class EMSpectrum(object):
                  siihbeta=None, oiidoublet=0.73, siidoublet=1.3,
                  oihbeta=None, siiihbeta=None, ariiihbeta=None, mgiihbeta=None,
                  vary_auxlines=False, auxline_priors=None,
+                 new_line_ratios=None, new_line_broad_ratios=None,
+                 new_line_priors=None, broadsigma=None,
                  linesigma=75.0, zshift=0.0, oiiflux=None, hbetaflux=None,
                  seed=None, backend='auto', device=None, dtype=None):
         """Build the actual emission-line spectrum.
@@ -340,6 +411,25 @@ class EMSpectrum(object):
                 spectra). Must provide the same four keys with 'mean'/'sigma'
                 in log10(line/Hbeta) space. Default None uses
                 self.AUXLINE_PRIORS.
+            new_line_ratios (dict, optional): Explicit narrow-component
+                line/Hbeta ratios (linear) for any of self.NEW_LINE_NAMES,
+                keyed by name (e.g. {'HeII_4686': 0.03}). Unlisted names
+                draw from new_line_priors. Only has an effect if
+                include_new_lines=True was passed to __init__ (these lines
+                aren't in the table otherwise). No legacy behavior to
+                preserve here (unlike vary_auxlines) since these lines
+                didn't exist before this feature.
+            new_line_broad_ratios (dict, optional): Same as new_line_ratios
+                but for the broad (AGN-like) component of each line.
+            new_line_priors (dict, optional): Override
+                self.NEW_LINE_PRIORS (narrow_mean/narrow_sigma/broad_mean/
+                broad_sigma per line, in log10(line/Hbeta) space).
+            broadsigma (float, optional): Shared broad-line-region velocity
+                sigma [km/s] for every broad component (default None: drawn
+                log-uniformly from self.BROADSIGMA_RANGE_KMS). Intentionally
+                a single shared value across all seven broad lines rather
+                than one per line -- see BROADSIGMA_RANGE_KMS's class-level
+                comment for the physical justification.
             linesigma (float, optional): Intrinsic emission-line velocity width/sigma
                 (default 75 km/s).  A sensible range is [30-150].
             zshift (float, optional): Perturb the emission lines from their laboratory
@@ -379,7 +469,7 @@ class EMSpectrum(object):
             the emission-line spectrum.
 
         """
-        from astropy.table import Table
+        from astropy.table import Table, vstack
 
         rand = np.random.RandomState(seed)
 
@@ -471,11 +561,52 @@ class EMSpectrum(object):
             # ratio feature itself.
             line['ratio'][is2800b] = line['ratio'][is2800a]/self.mgiidoublet
         
-        ## Normalize [NeIII] 3869.
-        #coeff = np.asarray([1.0876,-1.1647])
-        #disp = 0.1 # dex
-        #line['ratio'][is3869] = 10**(np.polyval(coeff,np.log10(oiiihbeta))+
-        #                             rand.normal(0.0,disp))
+        # Sec 1.3: seven new lines ([NeIII] 3869,3968; [OIII] 4363; HeII
+        # 4686; [NII] 5755; [SII] 4068,4076), each with an independent
+        # narrow-component ratio (resolved here) and broad-component ratio
+        # (resolved and applied further below, after the Hbeta flux
+        # normalization it depends on). The original author's own
+        # commented-out [NeIII] 3869 stub (a single polynomial vs.
+        # oiiihbeta, no broad component, no other 6 lines) previously lived
+        # here; superseded by this more general mechanism per the user's
+        # explicit direction to treat all new lines as independent free
+        # parameters (real covariances deferred to the project's planned
+        # NPE/normalizing-flow calibration against real spectra).
+        #
+        # Rows for these 7 lines only exist in `line` at all when
+        # include_new_lines=True was passed to __init__, so this block is a
+        # no-op (newline_narrow_ratio/newline_broad_ratio stay empty) for
+        # every pre-existing caller -- exact legacy-behavior preservation.
+        newline_narrow_ratio = {}
+        newline_broad_ratio = {}
+        if self.include_new_lines:
+            if new_line_priors is None:
+                new_line_priors = self.NEW_LINE_PRIORS
+            if new_line_ratios is None:
+                new_line_ratios = {}
+            if new_line_broad_ratios is None:
+                new_line_broad_ratios = {}
+            if broadsigma is None:
+                # ⚠ MAGIC: log-uniform draw over BROADSIGMA_RANGE_KMS (see
+                # that constant's definition for the physical reasoning).
+                broadsigma = 10**rand.uniform(np.log10(self.BROADSIGMA_RANGE_KMS[0]),
+                                               np.log10(self.BROADSIGMA_RANGE_KMS[1]))
+
+            for _name in self.NEW_LINE_NAMES:
+                _prior = new_line_priors[_name]
+                if _name in new_line_ratios:
+                    _narrow = new_line_ratios[_name]
+                else:
+                    _narrow = 10**rand.normal(_prior['narrow_mean'], _prior['narrow_sigma'])
+                if _name in new_line_broad_ratios:
+                    _broad = new_line_broad_ratios[_name]
+                else:
+                    _broad = 10**rand.normal(_prior['broad_mean'], _prior['broad_sigma'])
+                newline_narrow_ratio[_name] = _narrow
+                newline_broad_ratio[_name] = _broad
+
+                _idx = np.where(line['name'] == _name)[0][0]
+                line['ratio'][_idx] = _narrow
 
         # Normalize [OII] 3727, split into [OII] 3726,3729.
         factor1 = oiidoublet / (1.0+oiidoublet) # convert 3727-->3726
@@ -530,6 +661,62 @@ class EMSpectrum(object):
                 emspec = _lines_to_spectrum_numpy(self.log10wave, linecenters, norm, log10sigma)
         else:
             theseline = Table()
+
+        # Sec 1.3 broad (AGN-like) components. Built as a fully separate
+        # Gaussian-profile sum, using the *same* per-pixel builder functions
+        # as the narrow spectrum above (so it gets the torch/CUDA backend
+        # for free) but with broadsigma in place of linesigma, then summed
+        # into emspec. Additive: narrow and broad components of a given
+        # line are independent Gaussians superposed on the same continuum-
+        # normalized flux scale, consistent with this project's overall
+        # additive-decomposition goal (see project handoff Sec 0).
+        if self.include_new_lines and len(newline_broad_ratio) > 0:
+            is_hbeta = np.where(line['name'] == 'Hbeta')[0]
+            # Hbeta is a fixed member of recombination_lines.ecsv and is
+            # never removed, so this is always found in practice; the
+            # fallback to 0.0 is a defensive no-op, not an expected path.
+            hbeta_flux_effective = float(line['flux'][is_hbeta[0]]) if len(is_hbeta) > 0 else 0.0
+
+            newline_idx = np.array([np.where(line['name'] == n)[0][0] for n in self.NEW_LINE_NAMES])
+            loglinewave_new = np.log10(line['wave'].data[newline_idx])
+            in_window = ((loglinewave_new > self.log10wave.min()) &
+                         (loglinewave_new < self.log10wave.max()))
+
+            if np.any(in_window):
+                # Slice directly out of `line` (not a from-scratch Table) so
+                # dtypes/columns are guaranteed compatible with `theseline`
+                # for the vstack below.
+                broadtable = line[newline_idx[in_window]].copy()
+                broadnames_in_window = np.array(self.NEW_LINE_NAMES)[in_window]
+                broadtable['name'] = [n + '_broad' for n in broadnames_in_window]
+                broadratio = np.array([newline_broad_ratio[n] for n in broadnames_in_window])
+                broadtable['ratio'] = broadratio
+                broadtable['flux'] = hbeta_flux_effective * broadratio
+
+                broadlog10sigma = broadsigma / C_LIGHT / np.log(10)
+                broad_amp = broadtable['flux'].data / broadtable['wave'].data / np.log(10)
+                broad_norm = broad_amp / (np.sqrt(2.0 * np.pi) * broadlog10sigma)
+                broadtable['amp'] = broad_norm
+                broad_centers = np.log10(broadtable['wave'].data * (1.0 + zshift))
+
+                if _use_torch_backend(backend):
+                    emspec_broad = _lines_to_spectrum_torch(self.log10wave, broad_centers, broad_norm,
+                                                             broadlog10sigma, device=device, dtype=dtype)
+                else:
+                    emspec_broad = _lines_to_spectrum_numpy(self.log10wave, broad_centers, broad_norm,
+                                                             broadlog10sigma)
+
+                emspec = emspec + emspec_broad
+
+                # Fold broad rows into the returned 3rd element. This keeps
+                # the (emspec, wave, line) return contract unchanged --
+                # broad rows are distinguishable purely by their "_broad"
+                # name suffix -- so no caller that unpacks this tuple today
+                # needs to change.
+                if len(theseline) > 0:
+                    theseline = vstack([theseline, broadtable], metadata_conflicts='silent')
+                else:
+                    theseline = broadtable
 
         return emspec, 10**self.log10wave, theseline
 

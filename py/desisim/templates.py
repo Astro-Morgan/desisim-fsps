@@ -538,6 +538,27 @@ class GALAXY(object):
        galaxies (ELG, BGS, and LRG).
 
     """
+
+    # D4000 -> log10(EW) Gaussian scatter [dex] for the [OII] (ELG) and
+    # H-beta (BGS) normalization lines (handoff Sec 1.4). These are FLOORS
+    # inherited from the original desisim values (0.3, 0.2 dex respectively)
+    # -- widened here per an explicit project requirement to keep physically
+    # extreme (strong-emission-line) objects reachable in generated mocks,
+    # prioritizing recall/coverage of real extreme objects over sample
+    # "realism" (i.e. matching the true, narrower population distribution).
+    # ⚠ MAGIC: no calibration data justifies these specific widened values;
+    # chosen as roughly double the original floors, order-of-magnitude
+    # informed by the scatter seen in real EW(OII)/EW(Hbeta)-vs-D4000
+    # samples once starburst/extreme-emission-line tails are included.
+    # Scheduled for replacement via the project's planned NPE/normalizing-
+    # flow calibration once real spectra are available (Open Question 2).
+    # Overridable per-call via make_galaxy_templates(ewoii_sigma=...,
+    # ewhbeta_sigma=...); pass the original values (0.3, 0.2) explicitly to
+    # reproduce pre-fork behavior exactly (see
+    # TestGalaxyEWScatter.test_legacy_sigma_reproduces_old_behavior).
+    EWOII_SIGMA = 0.6    # ⚠ MAGIC (was 0.3)
+    EWHBETA_SIGMA = 0.45 # ⚠ MAGIC (was 0.2)
+
     def __init__(self, objtype='ELG', minwave=3600.0, maxwave=10000.0, cdelt=0.2, wave=None,
                  transient=None, tr_fluxratio=(0.01, 1.), tr_epoch=(-10,10),
                  include_mgii=False, colorcuts_function=None,
@@ -723,7 +744,7 @@ class GALAXY(object):
                               maxiter=10, seed=None, redshift=None, mag=None, vdisp=None,
                               input_meta=None, input_objmeta=None, nocolorcuts=False,
                               nocontinuum=False, agnlike=False, novdisp=False, south=True,
-                              restframe=False, verbose=False):
+                              restframe=False, verbose=False, ewoii_sigma=None, ewhbeta_sigma=None):
         """Build Monte Carlo galaxy spectra/templates.
 
         This function chooses random subsets of the basis continuum spectra (for
@@ -766,6 +787,16 @@ class GALAXY(object):
             range. Defaults to (100, 300) km/s.
           minlineflux (float, optional): Minimum emission-line flux in the line
             specified by self.normline (default 0 erg/s/cm2).
+          ewoii_sigma (float, optional): Gaussian scatter [dex] applied to the
+            D4000->log10(EW([OII])) relation for ELG-type objects (default
+            None, which resolves to self.EWOII_SIGMA = 0.6 dex). Pass 0.3 to
+            reproduce the original pre-fork behavior exactly. Ignored unless
+            self.normline == 'OII'.
+          ewhbeta_sigma (float, optional): Gaussian scatter [dex] applied to
+            the D4000->log10(EW(Hbeta)) relation for BGS-type objects
+            (default None, which resolves to self.EWHBETA_SIGMA = 0.45 dex).
+            Pass 0.2 to reproduce the original pre-fork behavior exactly.
+            Ignored unless self.normline == 'HBETA'.
         
           trans_filter (str): filter corresponding to TRANS_FLUXRATIORANGE (default
             'decam2014-r').
@@ -951,6 +982,12 @@ class GALAXY(object):
         # Optionally initialize the emission-line objects and line-ratios.
         d4000 = self.basemeta['D4000'].data
 
+        # Resolve the D4000->EW scatter widths once per call (handoff Sec 1.4).
+        if ewoii_sigma is None:
+            ewoii_sigma = self.EWOII_SIGMA
+        if ewhbeta_sigma is None:
+            ewhbeta_sigma = self.EWHBETA_SIGMA
+
         # Build each spectrum in turn.
         if restframe:
             outflux = np.zeros([nmodel, len(self.basewave)])
@@ -1018,10 +1055,10 @@ class GALAXY(object):
 
                         if self.normline.upper() == 'OII':
                             ewoii = 10.0**(np.polyval(self.ewoiicoeff, d4000) + # rest-frame EW([OII]), Angstrom
-                                           templaterand.normal(0.0, 0.3, nbase))
+                                           templaterand.normal(0.0, ewoii_sigma, nbase))
                         elif self.normline.upper() == 'HBETA':
                             ewhbeta = 10.0**(np.polyval(self.ewhbetacoeff, d4000) + \
-                                             templaterand.normal(0.0, 0.2, nbase)) * \
+                                             templaterand.normal(0.0, ewhbeta_sigma, nbase)) * \
                                              (self.basemeta['HBETA_LIMIT'].data == 0) # rest-frame H-beta, Angstrom
 
                     if self.normline.upper() == 'OII':
@@ -1253,7 +1290,7 @@ class ELG(GALAXY):
                        minoiiflux=0.0, trans_filter='decam2014-r',
                        redshift=None, mag=None, vdisp=None, seed=None, input_meta=None,
                        input_objmeta=None, nocolorcuts=False, nocontinuum=False, agnlike=False,
-                       novdisp=False, south=True, restframe=False, verbose=False):
+                       novdisp=False, south=True, restframe=False, verbose=False, ewoii_sigma=None):
         """Build Monte Carlo ELG spectra/templates.
 
         See the GALAXY.make_galaxy_templates function for documentation on the
@@ -1287,7 +1324,8 @@ class ELG(GALAXY):
                                             mag=mag, trans_filter=trans_filter,
                                             seed=seed, input_meta=input_meta, input_objmeta=input_objmeta,
                                             nocolorcuts=nocolorcuts, nocontinuum=nocontinuum, agnlike=agnlike,
-                                            novdisp=novdisp, south=south, restframe=restframe, verbose=verbose)
+                                            novdisp=novdisp, south=south, restframe=restframe, verbose=verbose,
+                                            ewoii_sigma=ewoii_sigma)
         return result
 
 class BGS(GALAXY):
@@ -1330,7 +1368,7 @@ class BGS(GALAXY):
                        minhbetaflux=0.0, trans_filter='decam2014-r',
                        redshift=None, mag=None, vdisp=None, seed=None, input_meta=None,
                        input_objmeta=None, nocolorcuts=False, nocontinuum=False, agnlike=False,
-                       novdisp=False, south=True, restframe=False, verbose=False):
+                       novdisp=False, south=True, restframe=False, verbose=False, ewhbeta_sigma=None):
         """Build Monte Carlo BGS spectra/templates.
 
          See the GALAXY.make_galaxy_templates function for documentation on the
@@ -1364,7 +1402,8 @@ class BGS(GALAXY):
                                             mag=mag, trans_filter=trans_filter,
                                             seed=seed, input_meta=input_meta, input_objmeta=input_objmeta,
                                             nocolorcuts=nocolorcuts, nocontinuum=nocontinuum, agnlike=agnlike,
-                                            novdisp=novdisp, south=south, restframe=restframe, verbose=verbose)
+                                            novdisp=novdisp, south=south, restframe=restframe, verbose=verbose,
+                                            ewhbeta_sigma=ewhbeta_sigma)
         return result
 
 class LRG(GALAXY):

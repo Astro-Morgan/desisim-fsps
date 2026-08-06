@@ -2,7 +2,7 @@ import os
 import unittest
 import numpy as np
 from astropy.table import Table, Column
-from desisim.templates import ELG, LRG, QSO, BGS, STAR, STD, MWS_STAR, WD, SIMQSO, EMSpectrum
+from desisim.templates import ELG, LRG, QSO, BGS, STAR, STD, MWS_STAR, WD, SIMQSO, EMSpectrum, GALAXY
 from desisim import lya_mock_p1d as lyamock
 
 desimodel_data_available = 'DESIMODEL' in os.environ
@@ -214,6 +214,71 @@ class TestEMSpectrumBackends(unittest.TestCase):
         emspec, wave, line = narrow_em.spectrum(backend='torch', **self.kwargs)
         self.assertTrue(np.all(emspec == 0))
         self.assertEqual(len(line), 0)
+
+
+class TestGalaxyEWScatter(unittest.TestCase):
+    '''Tests for the widened, extended D4000-coupled EW scatter (handoff
+    Sec 1.4). Requires $DESI_BASIS_TEMPLATES for the statistical tests since
+    they need real ELG/BGS basis templates (D4000, OII_CONTINUUM/
+    HBETA_CONTINUUM metadata); the pure class-constant check does not.
+    '''
+
+    def test_default_sigma_values_are_wider_than_legacy_floor(self):
+        '''"Do not tighten anything below its current value" (handoff Sec
+        1.4) -- the new defaults must be strictly wider than the original
+        pre-fork constants (0.3 dex for OII, 0.2 dex for Hbeta).'''
+        self.assertGreater(GALAXY.EWOII_SIGMA, 0.3)
+        self.assertGreater(GALAXY.EWHBETA_SIGMA, 0.2)
+
+    @unittest.skipUnless(desi_basis_templates_available, '$DESI_BASIS_TEMPLATES was not detected.')
+    def test_ewoii_sigma_param_changes_observed_scatter(self):
+        '''The ewoii_sigma override must actually reach the RNG draw: a
+        much wider requested sigma should produce a much wider empirical
+        spread in log10(EWOII) across many independent models than a much
+        narrower one. Statistical, not exact, by design (this exercises the
+        full make_templates pipeline, not just the isolated formula).'''
+        elg = ELG(wave=np.arange(5000, 8000, 2.0))
+        _, _, _, narrow_meta = elg.make_templates(nmodel=200, seed=1, ewoii_sigma=0.02)
+        _, _, _, wide_meta = elg.make_templates(nmodel=200, seed=1, ewoii_sigma=1.0)
+        narrow_spread = np.std(np.log10(narrow_meta['EWOII'].data))
+        wide_spread = np.std(np.log10(wide_meta['EWOII'].data))
+        self.assertGreater(wide_spread, 3 * narrow_spread)
+
+    @unittest.skipUnless(desi_basis_templates_available, '$DESI_BASIS_TEMPLATES was not detected.')
+    def test_ewhbeta_sigma_param_changes_observed_scatter(self):
+        bgs = BGS(wave=np.arange(3600, 9800, 2.0))
+        _, _, _, narrow_meta = bgs.make_templates(nmodel=200, seed=1, ewhbeta_sigma=0.02)
+        _, _, _, wide_meta = bgs.make_templates(nmodel=200, seed=1, ewhbeta_sigma=1.0)
+        narrow_hb = narrow_meta['EWHBETA'].data
+        wide_hb = wide_meta['EWHBETA'].data
+        # HBETA_LIMIT can zero some entries out; compare only the
+        # nonzero/finite population actually eligible for scatter.
+        narrow_spread = np.std(np.log10(narrow_hb[narrow_hb > 0]))
+        wide_spread = np.std(np.log10(wide_hb[wide_hb > 0]))
+        self.assertGreater(wide_spread, 3 * narrow_spread)
+
+    @unittest.skipUnless(desi_basis_templates_available, '$DESI_BASIS_TEMPLATES was not detected.')
+    def test_legacy_sigma_values_still_accepted(self):
+        '''Explicitly passing the original pre-fork values must still work
+        (the escape hatch back to old behavior promised in the docstring),
+        producing finite, positive EW values.'''
+        elg = ELG(wave=np.arange(5000, 8000, 2.0))
+        _, _, _, meta = elg.make_templates(nmodel=10, seed=2, ewoii_sigma=0.3)
+        self.assertTrue(np.all(np.isfinite(meta['EWOII'].data)))
+        self.assertTrue(np.all(meta['EWOII'].data > 0))
+
+        bgs = BGS(wave=np.arange(3600, 9800, 2.0))
+        _, _, _, meta = bgs.make_templates(nmodel=10, seed=2, ewhbeta_sigma=0.2)
+        self.assertTrue(np.all(np.isfinite(meta['EWHBETA'].data)))
+
+    @unittest.skipUnless(desi_basis_templates_available, '$DESI_BASIS_TEMPLATES was not detected.')
+    def test_default_call_unaffected_by_new_kwarg_presence(self):
+        '''Smoke test: omitting ewoii_sigma/ewhbeta_sigma entirely (the
+        pre-fork call signature) must still work end-to-end.'''
+        elg = ELG(wave=np.arange(5000, 8000, 2.0))
+        flux, wave, meta, objmeta = elg.make_templates(nmodel=5, seed=3)
+        self.assertEqual(flux.shape[0], 5)
+        self.assertTrue(np.all(np.isfinite(flux)))
 
 
 class TestTemplates(unittest.TestCase):

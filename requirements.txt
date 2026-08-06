@@ -34,3 +34,9 @@ git+https://github.com/desihub/specsim.git@main#egg=specsim
 # desisim works fine without it (falls back to the numpy reference
 # implementation); install for speed, especially on a GPU node.
 torch
+
+# Required for py/desisim/fsps_continuum.py (handoff Sec 1.1: FSPS-generated
+# supplemental stellar continuum). Needs $SPS_HOME pointing at a
+# cconroy20/fsps checkout at runtime (see SETUP.md Sec 2) -- not a build
+# dependency of desisim itself, only imported inside fsps_continuum.py.
+fsps

@@ -67,14 +67,23 @@ Scope / explicitly NOT covered here
   this module; the two are complementary (BAL = QSO broad-outflow troughs,
   this module = narrower ISM/CGM resonant-line absorption applicable to
   any object type, galaxy or QSO).
-- Wiring into GALAXY/QSO.make_templates(): NOT done in this module. This
-  is a standalone, independently testable class, analogous to how
+- Wiring into GALAXY/QSO.make_templates(): NOT done in this module (still
+  a standalone, independently testable class, analogous to how
   fsps_continuum.py's fsps_basis_templates() exists independently of
-  GALAXY before being passed in as baseflux/basewave/basemeta. Exactly
-  where/how to opt this into the per-object generation pipeline (e.g. a
-  new AbsorptionSpectrum instance + kwarg on GALAXY, applied after
-  continuum+emission are already combined) is an open design question
-  flagged for the PI rather than resolved silently here.
+  GALAXY before being passed in as baseflux/basewave/basemeta), but the
+  design question of *where* it plugs in has been resolved by the PI:
+  since this module's output is already additive (see "Design" above),
+  it sums in at the same generation stage as EMSpectrum's emission flux
+  (total = continuum + emission + absorption_flux), not as a post-hoc
+  multiplicative correction. BAL troughs remain a separate mechanism (see
+  next bullet) precisely because they are physically multiplicative,
+  which is why they cannot be merged into this additive stage. How a
+  given mock's QSO-vs-galaxy blend fraction should modulate which of
+  this module's 6 lines are active/how strong is explicitly deferred to
+  the project's planned NPE calibration rather than hardcoded here (per
+  PI direction: "QSO vs galaxy blend fraction correlation with emission/
+  absorption components should be solvable via NPE downstream"). Actual
+  code wiring into make_templates() is left for a follow-up commit.
 - Real covariance between the 6 lines' tau0/sigma_kms and any other
   per-object property (metallicity, inclination, D4000, ...): explicitly
   out of scope per project direction -- every tau0/sigma_kms here is an

@@ -236,6 +236,52 @@ def main():
     print('Wrote', fig4_path)
     print(coeff_table)
 
+    # ------------------------------------------------------------------
+    # Figure 5: additive component decomposition -- continuum, emission,
+    # absorption, and their sum, stacked so each channel's own ground-truth
+    # contribution is directly visible (this is the actual point of the
+    # whole project: mocks that decompose cleanly into known components).
+    # No dust panel yet -- see bin/README or the PR discussion for the
+    # dust-attenuation open question; a 5th panel is reserved for it.
+    # ------------------------------------------------------------------
+    strong_new_ratios = {n: 0.3 for n in EMSpectrum.NEW_LINE_NAMES}
+    strong_new_broad = {n: 0.15 for n in EMSpectrum.NEW_LINE_NAMES}
+    strong_tau0_decomp = {n: 1.0 for n in AbsorptionSpectrum.LINE_NAMES}
+
+    w_d, cont_d, em_d, ab_d, tot_d = build_rest_frame_mock(
+        basewave, base_continuum,
+        dict(hbetaflux=hbetaflux, include_new_lines=True, new_line_ratios=strong_new_ratios,
+             new_line_broad_ratios=strong_new_broad, broadsigma=1500.0, **fixed_ratios),
+        dict(tau0=strong_tau0_decomp, sigma_kms=80.0),
+        seed=1)
+
+    wave_obs_d, cont_obs_d = to_observed_frame(w_d, cont_d, z)
+    _, em_obs_d = to_observed_frame(w_d, em_d, z)
+    _, ab_obs_d = to_observed_frame(w_d, ab_d, z)
+    _, tot_obs_d = to_observed_frame(w_d, tot_d, z)
+    window_d = (wave_obs_d > 3600.0) & (wave_obs_d < 9824.0)
+
+    fig, axes = plt.subplots(4, 1, figsize=(13, 11), sharex=True)
+    panels = [
+        ('Continuum\n(real basis template)', cont_obs_d, 'tab:blue'),
+        ('+ Emission\n(EMSpectrum, new lines ON)', em_obs_d, 'tab:red'),
+        ('+ Absorption\n(AbsorptionSpectrum, ISM/CGM)', ab_obs_d, 'tab:purple'),
+        ('= Total mock\n(continuum+emission+absorption)', tot_obs_d, 'k'),
+    ]
+    for ax, (label, arr, color) in zip(axes, panels):
+        ax.plot(wave_obs_d[window_d], arr[window_d], color=color, lw=0.8)
+        ax.set_ylabel(label, fontsize=9)
+        ax.axhline(0.0, color='gray', lw=0.5, ls=':')
+    axes[-1].set_xlabel('Observed wavelength [Angstrom]')
+    fig.suptitle('{} at z={:.2f}: additive component decomposition (template #{})\n'
+                 '(dust attenuation not yet implemented -- see open question)'.format(
+                     args.objtype, z, args.templateid))
+    fig.tight_layout()
+    fig5_path = os.path.join(args.outdir, '5_additive_decomposition.png')
+    fig.savefig(fig5_path, dpi=130)
+    plt.close(fig)
+    print('Wrote', fig5_path)
+
     print('\nDone. All figures written to', os.path.abspath(args.outdir))
 
 

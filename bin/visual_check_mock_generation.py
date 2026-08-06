@@ -39,6 +39,7 @@ from desisim.io import read_basis_templates
 from desisim.templates import EMSpectrum
 from desisim.absorption import AbsorptionSpectrum
 from desisim.camera_calibration import CameraCalibration
+from desisim.dust import DustAttenuation
 
 
 def build_rest_frame_mock(basewave, base_continuum, em_kwargs, ab_kwargs, seed):
@@ -255,27 +256,39 @@ def main():
         dict(tau0=strong_tau0_decomp, sigma_kms=80.0),
         seed=1)
 
+    # Dust attenuation applies to (continuum+emission) as a single
+    # intrinsic SED -- see dust.py's module docstring for why (both are
+    # assumed to sit behind the same foreground dust column, unlike
+    # AbsorptionSpectrum which by design only attenuates the continuum).
+    dust = DustAttenuation()
+    intrinsic_d = cont_d + em_d
+    strong_theta = dict(theta0=1.2, theta1=1.0, theta2=0.6, theta3=0.1)  # exaggerated for visibility
+    dust_flux_d, _, dust_table = dust.spectrum(w_d, intrinsic_d, theta=strong_theta, seed=1)
+    tot_d_with_dust = tot_d + dust_flux_d
+
     wave_obs_d, cont_obs_d = to_observed_frame(w_d, cont_d, z)
     _, em_obs_d = to_observed_frame(w_d, em_d, z)
     _, ab_obs_d = to_observed_frame(w_d, ab_d, z)
-    _, tot_obs_d = to_observed_frame(w_d, tot_d, z)
+    _, dust_obs_d = to_observed_frame(w_d, dust_flux_d, z)
+    _, tot_obs_d = to_observed_frame(w_d, tot_d_with_dust, z)
     window_d = (wave_obs_d > 3600.0) & (wave_obs_d < 9824.0)
 
-    fig, axes = plt.subplots(4, 1, figsize=(13, 11), sharex=True)
+    fig, axes = plt.subplots(5, 1, figsize=(13, 13), sharex=True)
     panels = [
         ('Continuum\n(real basis template)', cont_obs_d, 'tab:blue'),
         ('+ Emission\n(EMSpectrum, new lines ON)', em_obs_d, 'tab:red'),
         ('+ Absorption\n(AbsorptionSpectrum, ISM/CGM)', ab_obs_d, 'tab:purple'),
-        ('= Total mock\n(continuum+emission+absorption)', tot_obs_d, 'k'),
+        ('+ Dust\n(DustAttenuation, exaggerated theta)', dust_obs_d, 'tab:brown'),
+        ('= Total mock\n(all 4 channels summed)', tot_obs_d, 'k'),
     ]
     for ax, (label, arr, color) in zip(axes, panels):
         ax.plot(wave_obs_d[window_d], arr[window_d], color=color, lw=0.8)
         ax.set_ylabel(label, fontsize=9)
         ax.axhline(0.0, color='gray', lw=0.5, ls=':')
     axes[-1].set_xlabel('Observed wavelength [Angstrom]')
-    fig.suptitle('{} at z={:.2f}: additive component decomposition (template #{})\n'
-                 '(dust attenuation not yet implemented -- see open question)'.format(
-                     args.objtype, z, args.templateid))
+    fig.suptitle('{} at z={:.2f}: additive component decomposition (template #{})'.format(
+        args.objtype, z, args.templateid))
+    print(dust_table)
     fig.tight_layout()
     fig5_path = os.path.join(args.outdir, '5_additive_decomposition.png')
     fig.savefig(fig5_path, dpi=130)

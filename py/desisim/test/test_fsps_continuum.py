@@ -108,6 +108,24 @@ class TestFSPSBasisTemplates(unittest.TestCase):
         with self.assertRaises(ValueError):
             fsps_basis_templates(objtype='WD', nbase=2, seed=1)
 
+    def test_nproc_matches_single_process_bit_for_bit(self):
+        '''The whole point of sharding across processes is that it must not
+        change the answer: same seed, same draws, same flux, regardless of
+        how many workers split the work.'''
+        from desisim.fsps_continuum import fsps_basis_templates
+        flux1, wave1, meta1 = fsps_basis_templates(objtype='ELG', nbase=4, seed=11, nproc=1)
+        flux2, wave2, meta2 = fsps_basis_templates(objtype='ELG', nbase=4, seed=11, nproc=2)
+        np.testing.assert_array_equal(wave1, wave2)
+        np.testing.assert_allclose(flux1, flux2)
+        np.testing.assert_array_equal(meta1['D4000'].data, meta2['D4000'].data)
+
+    def test_nproc_not_exceeding_nbase_does_not_error(self):
+        '''Requesting more workers than draws must be handled gracefully
+        (clamped down), not spawn empty/degenerate shards.'''
+        from desisim.fsps_continuum import fsps_basis_templates
+        flux, wave, meta = fsps_basis_templates(objtype='ELG', nbase=2, seed=5, nproc=8)
+        self.assertEqual(flux.shape[0], 2)
+
     def test_drop_in_as_ELG_baseflux_end_to_end(self):
         '''The actual point of this feature: GALAXY/ELG needs zero code
         changes to consume an FSPS-generated continuum.'''

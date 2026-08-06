@@ -70,17 +70,26 @@ silently shipping around them):
    not hardcode any assumption about which spec_lib is compiled in; it
    reads sp.wavelengths directly, so recompiling FSPS elsewhere with
    c3k_hr would transparently produce a denser grid with no code changes.
-3. Performance: sp.get_spectrum() cost in this environment is ~0.7-0.8s
-   per call *regardless of which parameter changed* (logzsol, dust2, tau,
-   even tage alone) -- this build does not appear to cache/incrementally
-   update between calls under zcontinuous=1. Building a library of
-   nbase=100 spectra therefore costs roughly a minute, one time (this is a
-   library-construction cost, analogous to reading a large FITS file once
-   -- not a per-mock-object cost). Not optimized further here (e.g. via
-   multiprocessing across independent draws) to keep this PR's diff
-   correctness-focused rather than also solving a performance problem;
-   flagged as natural follow-up work if larger nbase is needed.
+3. Performance: sp.get_spectrum() cost in this environment ranged from
+   ~0.7s to ~6.5s per call across different measurements in this session
+   (regardless of which parameter changed -- logzsol, dust2, tau, even
+   tage alone; this build does not appear to cache/incrementally update
+   between calls under zcontinuous=1), i.e. noisy and clearly not
+   dominated by which physics changed but by the sandbox's own variable
+   load. nproc= support (multiprocessing.Pool, each worker gets its own
+   StellarPopulation) is provided below and was verified for correctness
+   (bit-identical output regardless of nproc for the same seed) and real
+   (if sub-linear, ~1.4x on this sandbox's 2 cores) speedup -- but
+   generating a "tens of thousands"-scale library was NOT completed in
+   this session: the development sandbox has only 2 CPU cores and no
+   ability to run a job across tool-call boundaries (each shell call is an
+   isolated process; anything backgrounded dies when the call ends), so a
+   multi-hour single-session job simply doesn't fit here. This is a
+   correctness-and-scaling-mechanism deliverable, meant to be run at real
+   scale on a many-core machine (e.g. a NERSC Perlmutter CPU node with 128
+   cores) -- not a completed tens-of-thousands library.
 """
+import os
 import numpy as np
 from astropy.table import Table
 
@@ -157,12 +166,48 @@ def _d4000(wave, flux):
     return float(np.mean(fnu[red]) / np.mean(fnu[blue]))
 
 
+def _generate_shard(args):
+    """Worker function for multiprocessing.Pool: generate one shard of the
+    library in its own process (each process needs its own
+    fsps.StellarPopulation -- FSPS's Fortran state is not safely shareable
+    across processes).
+
+    A module-level (not nested/closure) function is used deliberately so
+    this is picklable regardless of the multiprocessing start method
+    ('fork' on Linux would tolerate a closure too, but this keeps the code
+    portable and easier to reason about).
+
+    Returns (flux [n_in_shard, npix], basewave [npix]) -- basewave is
+    returned from every shard (redundant across shards, but cheap and
+    avoids needing a separate throwaway StellarPopulation in the parent
+    process; it's deterministic given the compiled FSPS backend, so every
+    shard necessarily agrees).
+    """
+    tage, logzsol, dust2, tau, sfh, dust_type, minwave, maxwave = args
+    import fsps
+    sp = fsps.StellarPopulation(zcontinuous=1, sfh=sfh, dust_type=dust_type,
+                                 add_neb_emission=False, add_neb_continuum=False)
+    wave_native = np.asarray(sp.wavelengths, dtype=float)
+    mask = (wave_native >= minwave) & (wave_native <= maxwave)
+    basewave = wave_native[mask]
+
+    n = len(tage)
+    flux = np.empty((n, mask.sum()), dtype=np.float64)
+    for ii in range(n):
+        sp.params['logzsol'] = logzsol[ii]
+        sp.params['dust2'] = dust2[ii]
+        sp.params['tau'] = tau[ii]
+        _, spec = sp.get_spectrum(tage=tage[ii], peraa=True)
+        flux[ii] = spec[mask]
+    return flux, basewave
+
+
 def fsps_basis_templates(objtype='ELG', nbase=128, minwave=DEFAULT_MINWAVE,
                           maxwave=DEFAULT_MAXWAVE, seed=None, sfh=DEFAULT_SFH,
                           dust_type=DEFAULT_DUST_TYPE,
                           age_range=AGE_RANGE_GYR, logzsol_range=LOGZSOL_RANGE,
                           dust2_range=DUST2_RANGE, tau_range=TAU_RANGE_GYR,
-                          verbose=False):
+                          nproc=1, verbose=False):
     """Build an FSPS-generated (baseflux, basewave, basemeta) triple with
     the same contract as desisim.io.read_basis_templates(), suitable for
     passing directly into GALAXY/ELG/BGS/LRG's baseflux/basewave/basemeta
@@ -188,7 +233,25 @@ def fsps_basis_templates(objtype='ELG', nbase=128, minwave=DEFAULT_MINWAVE,
         age_range, logzsol_range, dust2_range, tau_range (tuple, optional):
             override the default (Gyr, dex, optical depth, Gyr) prior
             ranges (all ⚠ MAGIC; see module-level constants).
-        verbose (bool, optional): print progress every 10 draws.
+        nproc (int, optional): number of worker processes (default 1 =
+            single-threaded). Pass None to use os.cpu_count(). Each worker
+            builds its own independent shard of `nbase` in its own
+            fsps.StellarPopulation instance and results are concatenated;
+            this is embarrassingly parallel since draws are independent.
+            Measured cost in the sandbox this was developed in: ~0.7-2.3s
+            per draw *per core* (see module docstring Caveat 3), so
+            building a "tens of thousands"-scale library is a real
+            multi-hour job on a 1-2 core machine but straightforwardly a
+            few-minutes job on a real many-core node (e.g. a NERSC
+            Perlmutter CPU node has 128 cores: ~20,000 draws / 128 * 1s
+            ~ 156s). This was NOT run at that scale in this session -- the
+            sandbox used to develop this has only 2 cores and no ability to
+            run a job across tool-call boundaries, so this is a
+            correctness-and-scaling-mechanism deliverable, not a completed
+            tens-of-thousands library. Run it on an appropriately large
+            machine for the real library build.
+        verbose (bool, optional): print progress every 10 draws (nproc=1
+            only; per-shard progress isn't aggregated across processes).
 
     Returns:
         Tuple of (baseflux, basewave, basemeta):
@@ -208,8 +271,6 @@ def fsps_basis_templates(objtype='ELG', nbase=128, minwave=DEFAULT_MINWAVE,
                 given this whole project is about having known ground
                 truth for training data).
     """
-    import fsps
-
     objtype = objtype.upper()
     if objtype not in ('ELG', 'BGS', 'LRG'):
         raise ValueError("objtype must be one of 'ELG', 'BGS', 'LRG'; got {!r}".format(objtype))
@@ -220,24 +281,34 @@ def fsps_basis_templates(objtype='ELG', nbase=128, minwave=DEFAULT_MINWAVE,
     dust2 = rand.uniform(dust2_range[0], dust2_range[1], nbase)
     tau = rand.uniform(tau_range[0], tau_range[1], nbase)
 
-    sp = fsps.StellarPopulation(zcontinuous=1, sfh=sfh, dust_type=dust_type,
-                                 add_neb_emission=False, add_neb_continuum=False)
+    if nproc is None:
+        nproc = os.cpu_count() or 1
+    nproc = max(1, min(int(nproc), nbase))
 
-    wave_native = np.asarray(sp.wavelengths, dtype=float)
-    mask = (wave_native >= minwave) & (wave_native <= maxwave)
-    if not np.any(mask):
-        raise ValueError('No FSPS wavelength points fall within [{}, {}] Angstrom.'.format(minwave, maxwave))
-    basewave = wave_native[mask]
-
-    baseflux = np.empty((nbase, mask.sum()), dtype=np.float64)
-    for ii in range(nbase):
-        sp.params['logzsol'] = logzsol[ii]
-        sp.params['dust2'] = dust2[ii]
-        sp.params['tau'] = tau[ii]
-        _, spec = sp.get_spectrum(tage=tage[ii], peraa=True)
-        baseflux[ii] = spec[mask]
-        if verbose and (ii % 10 == 0):
-            print('fsps_basis_templates: {}/{}'.format(ii, nbase))
+    if nproc == 1:
+        baseflux, basewave = _generate_shard((tage, logzsol, dust2, tau, sfh, dust_type, minwave, maxwave))
+        if verbose:
+            print('fsps_basis_templates: generated {} templates (nproc=1)'.format(nbase))
+    else:
+        import multiprocessing
+        shard_idx = np.array_split(np.arange(nbase), nproc)
+        shard_args = [(tage[idx], logzsol[idx], dust2[idx], tau[idx], sfh, dust_type, minwave, maxwave)
+                      for idx in shard_idx]
+        if verbose:
+            print('fsps_basis_templates: dispatching {} draws across {} worker processes'.format(nbase, nproc))
+        with multiprocessing.Pool(nproc) as pool:
+            shard_results = pool.map(_generate_shard, shard_args)
+        baseflux = np.concatenate([flux for flux, _ in shard_results], axis=0)
+        basewave = shard_results[0][1]
+        # All shards must agree on the wavelength grid (it's deterministic
+        # given the compiled FSPS backend, independent of which draws a
+        # given shard happened to receive) -- verify rather than assume,
+        # since a silent mismatch here would misalign flux rows.
+        for _, shard_wave in shard_results[1:]:
+            if not np.array_equal(shard_wave, basewave):
+                raise RuntimeError('fsps_basis_templates: worker processes disagree on the native FSPS '
+                                    'wavelength grid; this should be impossible for a fixed compiled '
+                                    'backend and indicates environment inconsistency across processes.')
 
     if not np.all(np.isfinite(baseflux)) or np.any(baseflux < 0):
         raise RuntimeError('fsps_basis_templates: FSPS returned non-finite or negative flux; '

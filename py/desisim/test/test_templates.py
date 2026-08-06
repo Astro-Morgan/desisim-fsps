@@ -216,6 +216,205 @@ class TestEMSpectrumBackends(unittest.TestCase):
         self.assertEqual(len(line), 0)
 
 
+class TestNewLinesNarrowBroad(unittest.TestCase):
+    '''Unit/regression tests for handoff Sec 1.3: the seven new lines
+    ([NeIII] 3869,3968; [OIII] 4363; HeII 4686; [NII] 5755; [SII] 4068,4076)
+    and their independent narrow (nebular) + broad (AGN-like) tunable
+    components. include_new_lines defaults to False, so every pre-existing
+    caller (including every other test in this file) is unaffected -- that
+    invariant is exercised directly below.
+    '''
+
+    def setUp(self):
+        # Wide window so every new line (2796-9532A range across narrow +
+        # broad + all pre-existing lines) falls inside [minwave, maxwave].
+        self.em_new = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_new_lines=True)
+        self.em_legacy = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_new_lines=False)
+        self.fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
+
+    def _rows(self, line_table, name):
+        return line_table[line_table['name'] == name]
+
+    def test_new_lines_absent_by_default(self):
+        '''Regression test: include_new_lines=False (the default) must
+        produce a line table with none of the 7 new lines or their broad
+        counterparts -- exact legacy behavior for every existing caller.'''
+        _, _, line = self.em_legacy.spectrum(seed=1, hbetaflux=1e-16, **self.fixed_ratios)
+        names = set(line['name'])
+        for name in EMSpectrum.NEW_LINE_NAMES:
+            self.assertNotIn(name, names)
+            self.assertNotIn(name + '_broad', names)
+
+    def test_default_call_with_new_lines_on_still_matches_legacy_old_lines(self):
+        '''Turning include_new_lines on must not perturb the pre-existing
+        lines' ratios -- the new lines are additive rows in the same table,
+        not a change to how old rows are computed.'''
+        _, _, line_new = self.em_new.spectrum(seed=1, hbetaflux=1e-16, **self.fixed_ratios)
+        _, _, line_legacy = self.em_legacy.spectrum(seed=1, hbetaflux=1e-16, **self.fixed_ratios)
+        for name in ('[OIII]_5007', '[NII]_6584', '[SII]_6716', 'Hbeta', '[OII]_3726'):
+            old_ratio = float(self._rows(line_legacy, name)['ratio'][0])
+            new_ratio = float(self._rows(line_new, name)['ratio'][0])
+            self.assertAlmostEqual(old_ratio, new_ratio, places=10)
+
+    def test_new_lines_present_when_enabled(self):
+        '''Every one of the 7 new lines must appear with both a narrow row
+        (bare name) and a broad row (name + "_broad") once enabled.'''
+        _, _, line = self.em_new.spectrum(seed=1, hbetaflux=1e-16, **self.fixed_ratios)
+        names = set(line['name'])
+        for name in EMSpectrum.NEW_LINE_NAMES:
+            self.assertIn(name, names)
+            self.assertIn(name + '_broad', names)
+
+    def test_explicit_narrow_ratio_always_wins(self):
+        explicit = {n: 0.123 for n in EMSpectrum.NEW_LINE_NAMES}
+        _, _, line = self.em_new.spectrum(seed=1, hbetaflux=1e-16, new_line_ratios=explicit,
+                                           **self.fixed_ratios)
+        for name in EMSpectrum.NEW_LINE_NAMES:
+            # places=6, not more: the underlying 'ratio' Column is float32
+            # (see self.line's Column dtypes in __init__), so a float64
+            # 0.123 literal is only reproduced to ~1e-7-1e-8 precision --
+            # the same tolerance TestEMSpectrum uses for the analogous
+            # auxline ratio checks (e.g. test_explicit_auxline_value_always_wins).
+            self.assertAlmostEqual(float(self._rows(line, name)['ratio'][0]), 0.123, places=6)
+
+    def test_explicit_broad_ratio_always_wins(self):
+        explicit_broad = {n: 0.045 for n in EMSpectrum.NEW_LINE_NAMES}
+        _, _, line = self.em_new.spectrum(seed=1, hbetaflux=1e-16,
+                                           new_line_broad_ratios=explicit_broad, **self.fixed_ratios)
+        for name in EMSpectrum.NEW_LINE_NAMES:
+            row = self._rows(line, name + '_broad')
+            self.assertAlmostEqual(float(row['ratio'][0]), 0.045, places=10)
+
+    def test_broad_flux_scales_with_effective_hbeta_flux(self):
+        '''Broad-component flux = hbeta_flux_effective * broad_ratio. Vary
+        hbetaflux and confirm the broad flux for a fixed ratio scales
+        linearly with it (the narrow ratio path is independently tested
+        already in TestEMSpectrum; this isolates the broad-flux formula).'''
+        explicit_broad = {n: 0.02 for n in EMSpectrum.NEW_LINE_NAMES}
+        _, _, line_a = self.em_new.spectrum(seed=1, hbetaflux=1e-16,
+                                             new_line_broad_ratios=explicit_broad, **self.fixed_ratios)
+        _, _, line_b = self.em_new.spectrum(seed=1, hbetaflux=2e-16,
+                                             new_line_broad_ratios=explicit_broad, **self.fixed_ratios)
+        for name in EMSpectrum.NEW_LINE_NAMES:
+            flux_a = float(self._rows(line_a, name + '_broad')['flux'][0])
+            flux_b = float(self._rows(line_b, name + '_broad')['flux'][0])
+            self.assertAlmostEqual(flux_b / flux_a, 2.0, places=6)
+
+    def test_broadsigma_explicit_value_always_wins(self):
+        '''Passing broadsigma explicitly must be honored (no draw), and be
+        reflected in a wider broad-line amplitude-to-flux relationship
+        (amp = flux/(wave*ln10) / (sqrt(2*pi)*log10sigma), so larger
+        broadsigma at fixed flux gives smaller amp).'''
+        explicit_broad = {n: 0.02 for n in EMSpectrum.NEW_LINE_NAMES}
+        _, _, line_narrow_sigma = self.em_new.spectrum(
+            seed=1, hbetaflux=1e-16, new_line_broad_ratios=explicit_broad,
+            broadsigma=500.0, **self.fixed_ratios)
+        _, _, line_wide_sigma = self.em_new.spectrum(
+            seed=1, hbetaflux=1e-16, new_line_broad_ratios=explicit_broad,
+            broadsigma=4000.0, **self.fixed_ratios)
+        name = EMSpectrum.NEW_LINE_NAMES[0]
+        amp_narrow = float(self._rows(line_narrow_sigma, name + '_broad')['amp'][0])
+        amp_wide = float(self._rows(line_wide_sigma, name + '_broad')['amp'][0])
+        # Same integrated flux, wider sigma => smaller peak amplitude.
+        self.assertGreater(amp_narrow, amp_wide)
+
+    def test_broadsigma_draw_is_seed_reproducible(self):
+        '''With broadsigma=None (the default), the log-uniform draw over
+        BROADSIGMA_RANGE_KMS must be seed-reproducible and (almost surely)
+        differ across seeds.'''
+        _, _, lineA = self.em_new.spectrum(seed=10, hbetaflux=1e-16, **self.fixed_ratios)
+        _, _, lineA2 = self.em_new.spectrum(seed=10, hbetaflux=1e-16, **self.fixed_ratios)
+        _, _, lineB = self.em_new.spectrum(seed=11, hbetaflux=1e-16, **self.fixed_ratios)
+        name = EMSpectrum.NEW_LINE_NAMES[0] + '_broad'
+        amp_A = float(self._rows(lineA, name)['amp'][0])
+        amp_A2 = float(self._rows(lineA2, name)['amp'][0])
+        amp_B = float(self._rows(lineB, name)['amp'][0])
+        self.assertAlmostEqual(amp_A, amp_A2, places=10)
+        # amp values here are O(1e-20); assertNotAlmostEqual's absolute
+        # "places" rounding would spuriously call any two such tiny numbers
+        # "equal" (both round to 0.0 at 10 decimal places). Compare via
+        # relative closeness instead, which is what's physically meaningful.
+        self.assertFalse(np.isclose(amp_A, amp_B, rtol=1e-6, atol=0.0))
+
+    def test_broadsigma_range_boundary_values_do_not_error(self):
+        for val in EMSpectrum.BROADSIGMA_RANGE_KMS:
+            emspec, wave, line = self.em_new.spectrum(seed=1, hbetaflux=1e-16, broadsigma=val,
+                                                       **self.fixed_ratios)
+            self.assertTrue(np.all(np.isfinite(emspec)))
+
+    def test_zero_broad_ratio_contributes_zero_flux(self):
+        '''Edge case: a broad ratio of exactly 0 must produce exactly zero
+        broad-component flux (not NaN/Inf from e.g. a log(0) in the
+        amplitude formula), while the narrow component is untouched.'''
+        zero_broad = {n: 0.0 for n in EMSpectrum.NEW_LINE_NAMES}
+        emspec, wave, line = self.em_new.spectrum(seed=1, hbetaflux=1e-16,
+                                                    new_line_broad_ratios=zero_broad, **self.fixed_ratios)
+        self.assertTrue(np.all(np.isfinite(emspec)))
+        for name in EMSpectrum.NEW_LINE_NAMES:
+            row = self._rows(line, name + '_broad')
+            self.assertAlmostEqual(float(row['flux'][0]), 0.0, places=15)
+
+    def test_new_line_priors_override(self):
+        '''A caller-supplied new_line_priors dict must be used in place of
+        NEW_LINE_PRIORS for the draw (zero-sigma edge case: deterministic
+        regardless of seed).'''
+        zero_sigma_priors = {
+            name: dict(narrow_mean=np.log10(0.07), narrow_sigma=0.0,
+                       broad_mean=np.log10(0.01), broad_sigma=0.0)
+            for name in EMSpectrum.NEW_LINE_NAMES
+        }
+        _, _, line1 = self.em_new.spectrum(seed=1, hbetaflux=1e-16,
+                                            new_line_priors=zero_sigma_priors, **self.fixed_ratios)
+        _, _, line2 = self.em_new.spectrum(seed=99, hbetaflux=1e-16,
+                                            new_line_priors=zero_sigma_priors, **self.fixed_ratios)
+        for name in EMSpectrum.NEW_LINE_NAMES:
+            self.assertAlmostEqual(float(self._rows(line1, name)['ratio'][0]), 0.07, places=6)
+            self.assertAlmostEqual(float(self._rows(line2, name)['ratio'][0]), 0.07, places=6)
+
+    def test_narrow_and_broad_flux_are_additive_in_emspec(self):
+        '''Integration/energy-conservation check: the summed spectrum with
+        both narrow and broad components enabled must, at each pixel, equal
+        the sum of a narrow-only run and a broad-only run (narrow ratio
+        forced to ~0 in the broad-only run and vice versa), since the two
+        components are independent superposed Gaussians by construction.'''
+        narrow_ratios = {n: 0.05 for n in EMSpectrum.NEW_LINE_NAMES}
+        broad_ratios = {n: 0.02 for n in EMSpectrum.NEW_LINE_NAMES}
+        zero = {n: 0.0 for n in EMSpectrum.NEW_LINE_NAMES}
+
+        emspec_both, wave, _ = self.em_new.spectrum(
+            seed=1, hbetaflux=1e-16, new_line_ratios=narrow_ratios,
+            new_line_broad_ratios=broad_ratios, broadsigma=1000.0, **self.fixed_ratios)
+        emspec_narrow_only, _, _ = self.em_new.spectrum(
+            seed=1, hbetaflux=1e-16, new_line_ratios=narrow_ratios,
+            new_line_broad_ratios=zero, broadsigma=1000.0, **self.fixed_ratios)
+        emspec_broad_only, _, _ = self.em_new.spectrum(
+            seed=1, hbetaflux=1e-16, new_line_ratios=zero,
+            new_line_broad_ratios=broad_ratios, broadsigma=1000.0, **self.fixed_ratios)
+        emspec_neither, _, _ = self.em_new.spectrum(
+            seed=1, hbetaflux=1e-16, new_line_ratios=zero,
+            new_line_broad_ratios=zero, broadsigma=1000.0, **self.fixed_ratios)
+
+        # narrow_only + broad_only - neither (to remove the double-counted
+        # shared old-line spectrum) must equal the both-enabled spectrum.
+        reconstructed = emspec_narrow_only + emspec_broad_only - emspec_neither
+        np.testing.assert_allclose(emspec_both, reconstructed, rtol=1e-8, atol=1e-30)
+
+    def test_output_shape_and_no_nan(self):
+        emspec, wave, line = self.em_new.spectrum(seed=1, hbetaflux=1e-16, **self.fixed_ratios)
+        self.assertEqual(emspec.shape, wave.shape)
+        self.assertTrue(np.all(np.isfinite(emspec)))
+        self.assertTrue(np.all(emspec >= 0))
+
+    def test_torch_and_numpy_backends_agree_with_new_lines(self):
+        '''The broad-component path reuses _lines_to_spectrum_{numpy,torch}
+        exactly like the narrow path -- confirm both backends still agree
+        once new lines + broad components are in play.'''
+        kwargs = dict(seed=1, hbetaflux=1e-16, **self.fixed_ratios)
+        emspec_np, _, _ = self.em_new.spectrum(backend='numpy', **kwargs)
+        emspec_torch, _, _ = self.em_new.spectrum(backend='torch', device='cpu', **kwargs)
+        np.testing.assert_allclose(emspec_np, emspec_torch, rtol=1e-6, atol=1e-30)
+
+
 class TestGalaxyEWScatter(unittest.TestCase):
     '''Tests for the widened, extended D4000-coupled EW scatter (handoff
     Sec 1.4). Requires $DESI_BASIS_TEMPLATES for the statistical tests since

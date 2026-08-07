@@ -147,6 +147,69 @@ class TestAbsorptionSpectrum(unittest.TestCase):
         absflux, wave, line = ab.spectrum(self.wave, self.flux, seed=1)
         np.testing.assert_array_equal(wave, 10**custom_grid)
 
+    def test_outflow_velshift_off_by_default_is_noop(self):
+        '''Backward-compatibility guarantee: with include_outflow_velshift
+        left at its default (False), velshift_kms must be forced to
+        exactly 0.0 whenever not explicitly passed, for every pre-existing
+        caller that doesn't know this parameter exists.'''
+        for seed in range(5):
+            _, _, line = self.ab.spectrum(self.wave, self.flux, seed=seed)
+            np.testing.assert_allclose(line['velshift_kms'].data, 0.0)
+
+    def test_include_outflow_velshift_draws_within_range_and_reproducible(self):
+        ab = AbsorptionSpectrum(minwave=2000.0, maxwave=10000.0,
+                                 include_outflow_velshift=True)
+        _, _, lineA = ab.spectrum(self.wave, self.flux, seed=7)
+        _, _, lineA2 = ab.spectrum(self.wave, self.flux, seed=7)
+        v = float(lineA['velshift_kms'][0])
+        v2 = float(lineA2['velshift_kms'][0])
+        self.assertAlmostEqual(v, v2, places=10)
+        self.assertGreaterEqual(v, AbsorptionSpectrum.VELSHIFT_KMS_RANGE[0])
+        self.assertLessEqual(v, AbsorptionSpectrum.VELSHIFT_KMS_RANGE[1])
+
+    def test_include_outflow_velshift_varies_across_seeds(self):
+        ab = AbsorptionSpectrum(minwave=2000.0, maxwave=10000.0,
+                                 include_outflow_velshift=True)
+        draws = set()
+        for seed in range(10):
+            _, _, line = ab.spectrum(self.wave, self.flux, seed=seed)
+            draws.add(round(float(line['velshift_kms'][0]), 6))
+        self.assertGreater(len(draws), 1)
+
+    def test_explicit_velshift_kms_always_wins_regardless_of_flag(self):
+        '''An explicit velshift_kms must be respected whether or not
+        include_outflow_velshift was set on the constructor.'''
+        for flag in (False, True):
+            ab = AbsorptionSpectrum(minwave=2000.0, maxwave=10000.0,
+                                     include_outflow_velshift=flag)
+            _, _, line = ab.spectrum(self.wave, self.flux, velshift_kms=-42.0, seed=1)
+            np.testing.assert_allclose(line['velshift_kms'].data, -42.0)
+
+    def test_velshift_shifts_absorption_trough_bluewad(self):
+        '''A negative (blueshifted) velshift_kms should move the observed
+        absorption trough to shorter wavelength relative to velshift=0,
+        mirroring how zshift moves associated-absorber line centers
+        (see test_associated_absorption.py's test_zshift_moves_line_centers).'''
+        name = 'CaII_K'
+        ab = AbsorptionSpectrum(minwave=3000.0, maxwave=5000.0, cdelt_kms=2.0,
+                                 include_lines=[name])
+        d0, wave0, _ = ab.spectrum(self.wave, self.flux, tau0={name: 2.0},
+                                    sigma_kms=50.0, velshift_kms=0.0, seed=1)
+        d1, wave1, _ = ab.spectrum(self.wave, self.flux, tau0={name: 2.0},
+                                    sigma_kms=50.0, velshift_kms=-200.0, seed=1)
+        np.testing.assert_array_equal(wave0, wave1)
+        idx0 = np.argmin(d0)
+        idx1 = np.argmin(d1)
+        self.assertLess(wave0[idx1], wave0[idx0])
+
+    def test_velshift_kms_backend_agreement(self):
+        ab = AbsorptionSpectrum(minwave=2000.0, maxwave=10000.0,
+                                 include_outflow_velshift=True)
+        kwargs = dict(seed=3, velshift_kms=-150.0)
+        a_np, _, _ = ab.spectrum(self.wave, self.flux, backend='numpy', **kwargs)
+        a_torch, _, _ = ab.spectrum(self.wave, self.flux, backend='torch', device='cpu', **kwargs)
+        np.testing.assert_allclose(a_np, a_torch, rtol=1e-6, atol=1e-30)
+
 
 if __name__ == '__main__':
     unittest.main()

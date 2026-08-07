@@ -91,6 +91,36 @@ Scope / explicitly NOT covered here
   project's planned NPE/normalizing-flow calibration against real spectra.
 
 --------------------------------------------------------------------------
+2026-08-07: independent outflow velocity offset (velshift_kms)
+--------------------------------------------------------------------------
+Added an optional `velshift_kms` parameter (default 0.0) to spectrum(),
+independent of both `zshift` (systemic redshift) and `sigma_kms` (line
+width) -- closing gap-analysis item 2(c)'s "ISM/CGM outflow offset."
+"Down-the-barrel" spectroscopy (Na I D, Ca II, Mg II, Fe II absorption
+against a galaxy's own starlight) routinely finds these lines blueshifted
+by ~100-300 km/s relative to systemic, the standard signature of a
+galactic outflow (Weiner et al. 2009 finds a representative mean of
+~-166+/-130 km/s at z~2.2; Rubin et al. 2014; Chisholm et al. 2016 give
+an outflow-velocity/SFR scaling if that correlation is ever wanted, not
+implemented here). VELSHIFT_KMS_RANGE=(-300.0, 0.0) below is a MAGIC-
+flagged uniform draw range anchored on that ~100-300 km/s figure, not a
+fit to any specific dataset. Applied identically to `zshift`'s effect --
+added directly to the log10-wavelength line centers, same conversion as
+`sigma_kms`'s log10sigma.
+
+Gated behind a new constructor flag `include_outflow_velshift=False`
+(default False, same backward-compatibility convention as every opt-in
+extension added to dust.py this same week): with the flag off,
+velshift_kms is forced to exactly 0.0 unless explicitly overridden in
+spectrum(), so every pre-existing caller (including this module's own
+original test suite) is bit-for-bit unaffected. Unlike sigma_kms/tau0
+(which have always drawn randomly by default since this module's first
+version, with no prior "off" behavior to preserve), velshift_kms is a
+brand-new capability being added to an already-deployed module, so it
+gets the explicit opt-in treatment rather than silently becoming a new
+source of randomness for existing callers.
+
+--------------------------------------------------------------------------
 Line list / vacuum wavelengths
 --------------------------------------------------------------------------
 Mg II 2796.352 / 2803.530 vac. A reuse the *exact* values already present
@@ -161,8 +191,17 @@ class AbsorptionSpectrum(object):
     # broader trough widths).
     SIGMA_KMS_RANGE = (10.0, 300.0)
 
+    # (Y) MAGIC: shared outflow velocity offset, uniform draw range [km/s],
+    # applied to all active lines' centers independent of zshift/sigma_kms.
+    # Anchored on down-the-barrel outflow studies (Weiner et al. 2009's
+    # representative mean ~-166+/-130 km/s at z~2.2; Rubin et al. 2014) --
+    # see module docstring's "independent outflow velocity offset" section.
+    # Negative = blueshifted (outflowing toward the observer), matching
+    # this fork's convention elsewhere (e.g. AssociatedAbsorberSystems).
+    VELSHIFT_KMS_RANGE = (-300.0, 0.0)
+
     def __init__(self, minwave=2000.0, maxwave=10000.0, cdelt_kms=20.0,
-                 log10wave=None, include_lines=None):
+                 log10wave=None, include_lines=None, include_outflow_velshift=False):
         """
         Args:
             minwave, maxwave (float): rest-frame output grid bounds [A].
@@ -176,6 +215,12 @@ class AbsorptionSpectrum(object):
                 activate (default: all 6). Lets a caller opt into e.g. only
                 Mg II without a combinatorial explosion of per-line boolean
                 flags.
+            include_outflow_velshift (bool, optional): default False
+                (legacy behavior -- velshift_kms forced to 0.0 unless
+                explicitly given in spectrum()). If True, spectrum() draws
+                velshift_kms from VELSHIFT_KMS_RANGE when not explicitly
+                given -- see module docstring's "independent outflow
+                velocity offset" section.
         """
         if log10wave is None:
             cdelt_loglam = cdelt_kms / C_LIGHT / np.log(10)
@@ -189,9 +234,10 @@ class AbsorptionSpectrum(object):
             if unknown:
                 raise ValueError('Unknown line name(s) in include_lines: {}'.format(sorted(unknown)))
         self.include_lines = include_lines
+        self.include_outflow_velshift = include_outflow_velshift
 
     def spectrum(self, continuum_wave, continuum_flux, tau0=None, sigma_kms=None,
-                 tau0_priors=None, zshift=0.0, seed=None,
+                 velshift_kms=None, tau0_priors=None, zshift=0.0, seed=None,
                  backend='auto', device=None, dtype=None):
         """Build the additive absorption-flux-deficit array.
 
@@ -207,6 +253,13 @@ class AbsorptionSpectrum(object):
             sigma_kms (float, optional): explicit shared absorber velocity
                 width [km/s]; default None draws log-uniformly from
                 SIGMA_KMS_RANGE.
+            velshift_kms (float, optional): explicit shared outflow
+                velocity offset [km/s] applied to all active line centers,
+                independent of zshift and sigma_kms (see module docstring's
+                "independent outflow velocity offset" section). Default
+                None: forced to 0.0 unless include_outflow_velshift=True
+                was passed to the constructor, in which case it draws
+                uniformly from VELSHIFT_KMS_RANGE.
             tau0_priors (dict, optional): override TAU0_PRIORS.
             zshift (float): redshift applied to line centers only (matches
                 EMSpectrum.spectrum's zshift convention); the output grid
@@ -226,7 +279,7 @@ class AbsorptionSpectrum(object):
             continuum_on_output_grid + absorption_flux reproduces
             continuum_on_output_grid * exp(-tau(lambda)); wave is
             10**self.log10wave; line is a Table of per-line
-            name/wave/tau0/sigma_kms used.
+            name/wave/tau0/sigma_kms/velshift_kms used.
         """
         from astropy.table import Table
 
@@ -241,6 +294,18 @@ class AbsorptionSpectrum(object):
             # constant's definition above for the physical reasoning.
             sigma_kms = 10**rand.uniform(np.log10(self.SIGMA_KMS_RANGE[0]),
                                           np.log10(self.SIGMA_KMS_RANGE[1]))
+        if velshift_kms is None:
+            if self.include_outflow_velshift:
+                # ⚠ MAGIC: uniform draw over VELSHIFT_KMS_RANGE; see that
+                # constant's definition above for the physical reasoning.
+                velshift_kms = rand.uniform(*self.VELSHIFT_KMS_RANGE)
+            else:
+                # Backward-compatibility default: this is a brand-new
+                # capability added to an already-deployed module (unlike
+                # sigma_kms/tau0, which have always drawn randomly since
+                # this module's first version), so it stays a no-op unless
+                # explicitly opted into via include_outflow_velshift=True.
+                velshift_kms = 0.0
 
         names = list(self.include_lines)
         tau0_resolved = np.empty(len(names))
@@ -253,7 +318,7 @@ class AbsorptionSpectrum(object):
 
         wave_rest = np.array([self.LINE_WAVE_VACUUM[name] for name in names])
         log10sigma = sigma_kms / C_LIGHT / np.log(10)
-        centers = np.log10(wave_rest * (1.0 + zshift))
+        centers = np.log10(wave_rest * (1.0 + zshift)) + velshift_kms / C_LIGHT / np.log(10)
 
         in_window = (centers > self.log10wave.min()) & (centers < self.log10wave.max())
 
@@ -282,6 +347,7 @@ class AbsorptionSpectrum(object):
         line['wave'] = wave_rest
         line['tau0'] = tau0_resolved
         line['sigma_kms'] = np.full(len(names), sigma_kms)
+        line['velshift_kms'] = np.full(len(names), velshift_kms)
         line['in_window'] = in_window
 
         return absorption_flux, wave_out, line

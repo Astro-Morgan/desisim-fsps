@@ -41,46 +41,44 @@ Currently exposable as genuine, independent additive channels (fully
 implemented and tested elsewhere in this fork):
   - continuum_stellar: FSPS (fsps_continuum.py, dust2=0 by default per the
     2026-08-06 double-counting fix) or real DESI basis templates.
+  - continuum_agn: AGNPowerLawContinuum (agn_continuum.py), wrapping
+    simqso's own BrokenPowerLawContinuumVar. Per explicit PI direction
+    ("final ground-truth continuum is the dust-free FSPS stellar SED + the
+    simqso broken power-law"), the target continuum bucket is exactly
+    continuum_stellar + continuum_agn -- no independent reimplementation,
+    no double-counting risk (confirmed the default QSO model carries no
+    baked-in dust extinction feature).
   - narrow_emission, broad_emission: EMSpectrum (templates.py).
   - ism_absorption: AbsorptionSpectrum (absorption.py).
   - dust_flux: DustAttenuation (dust.py) -- called once per blended
     component (galaxy, QSO) per its own module docstring.
 
-Two pieces of the PI's scheme are NOT yet implemented anywhere in this
-fork and are passed into this module as optional (default None/zero)
-placeholders until built:
-  - continuum_agn: the AGN accretion-disk power-law continuum. Confirmed
-    (2026-08-06, by reading simqso's source directly) that this is a
-    genuinely separable object in simqso's own architecture --
-    `simqso.sqgrids.BrokenPowerLawContinuumVar` is evaluated independently
-    of emission lines via `.render(wave, z, slopes, fluxNorm)`, and
-    `simqso.sqrun.buildQsoSpectrum(..., save_components=True)` already
-    returns a components dict separating the continuum's raw contribution
-    from each emission feature's (multiplicative, EW-based) contribution.
-    Also confirmed: the fork's current default QSO model
-    (`simqso.sqmodels.get_BossDr9_model_vars`, used by
-    `templates.SIMQSO._make_simqso_templates`) does NOT include simqso's
-    own optional SMC/Calzetti dust-extinction feature -- so, unlike the
-    FSPS/Calzetti case, there is currently no double-counting risk between
-    simqso's QSO continuum and this fork's DustAttenuation. Exposing
-    continuum_agn as an independent callable channel (mirroring how
-    fsps_continuum.py exposes the stellar side) is a genuinely new, but
-    now well-scoped, integration task -- not started yet, and needs a
-    design decision on whether to call into simqso's own
-    BrokenPowerLawContinuumVar directly (tied to whichever QSO model is
-    configured) or reimplement an independent, simqso-decoupled power-law
-    continuum generator (in the same spirit as the SBPL machinery just
-    built for dust.py, reusable even where simqso isn't installed).
-  - dust_scatter_excess: the "dust scattering into the line of sight [that]
-    pushes [emission] above the continuum" effect the PI flagged. This is
-    real physics (documented, e.g., in polar-scattered/Type-2 AGN spectra
-    and resonant-line radiative transfer such as Lyman-alpha), but the
-    PI's exact intended mechanism was not specified precisely enough here
-    to commit to one parametric form without risking building the wrong
-    thing -- flagged for PI clarification rather than guessed at (see the
-    two candidate mechanisms in this module's accompanying discussion:
-    (a) resonant-line scattering wings vs. (b) a scattered-light pseudo-
-    continuum/pseudo-emission excess). Not started.
+One piece of the PI's scheme is NOT yet implemented and is passed into
+this module as an optional (default None/zero) placeholder until built:
+  - dust_scatter_excess: dust/electron scattering redirecting light back
+    INTO the line of sight (e.g. polar-scattered light in Type 2 AGN),
+    appearing as a positive flux excess -- a physically distinct process
+    from the light DustAttenuation already removes from the direct LOS
+    (which folds in both true absorption and out-scattering, per the
+    standard extinction-curve convention). Per PI direction (2026-08-06),
+    two things remain genuinely open here, not yet resolved: (1) whether
+    the excess is better classified as continuum-like (smooth, broadband,
+    as in the Type 2 AGN polar-scattering literature) or emission-like
+    (tied to specific resonant-line radiative transfer), and (2) whether
+    it is ever strong enough in realistic DESI-relevant geometries to
+    partially offset the same-wavelength flux loss from out-scattering,
+    or is always sub-dominant. Leaning candidate (not yet implemented,
+    not yet confirmed with the PI): pair this with DustAttenuation itself
+    as a new opt-in `scattered_flux` output -- a fraction f_scat of the
+    same |dust_flux| light removed from a given component's LOS,
+    re-appearing as a positive term with its own (bluer-favoring, per
+    Rayleigh-like scattering-efficiency scaling) wavelength dependence --
+    which would guarantee self-consistency (can never scatter back in
+    more than was removed) and sidesteps the continuum-vs-emission
+    classification question by keeping the net dust effect
+    (dust_flux + scattered_flux) together in the "absorption" bucket,
+    simply no longer guaranteed non-positive. Not implemented; needs
+    sign-off before building.
 
 BAL troughs are intentionally NOT summed by this module yet: bal.py's
 existing mechanism selects and multiplies a whole real-observed BAL
@@ -151,12 +149,13 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
             call's output before passing it in here (see dust.py's
             "Universality across galaxies and QSOs"). Default: zero.
         continuum_agn (ndarray, optional): AGN accretion-disk power-law
-            continuum. NOT YET IMPLEMENTED anywhere in this fork -- see
-            module docstring's "Open items". Default: zero.
+            continuum, from AGNPowerLawContinuum.spectrum() (agn_continuum.py).
+            Per PI direction, the target continuum bucket is exactly
+            continuum_stellar + continuum_agn. Default: zero.
         dust_scatter_excess (ndarray, optional): dust-scattering-into-LOS
-            excess pushing emission above the continuum. NOT YET
-            IMPLEMENTED -- mechanism pending PI clarification (see module
-            docstring). Default: zero.
+            excess flux. NOT YET IMPLEMENTED -- mechanism/classification
+            pending PI sign-off (see module docstring's "Open items").
+            Default: zero.
         bal_flux (ndarray, optional): forward-compatible slot for an
             eventual additive parametric BAL channel (task #17). bal.py's
             *current* whole-template multiplicative mechanism should NOT

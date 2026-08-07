@@ -173,7 +173,16 @@ class EMSpectrum(object):
             [km/s, default 20].
         log10wave (numpy.ndarray, optional): Input/output wavelength array
             (log10-Angstrom, default None).
-        include_mgii (bool, optional): Include Mg II in emission (default False). 
+        include_mgii (bool, optional): Include Mg II in emission (default False).
+        include_new_lines (bool, optional): Include the seven Sec 1.3
+            narrow+broad AGN-like lines (default False).
+        include_broad_velshift (bool, optional): default False (legacy
+            behavior -- broadshift_kms forced to 0.0 unless explicitly
+            given in spectrum()). If True, spectrum() draws broadshift_kms
+            from BROADSHIFT_KMS_RANGE when not explicitly given. Only has
+            an effect when include_new_lines=True (there are no broad
+            lines to shift otherwise). See BROADSHIFT_KMS_RANGE's
+            class-level comment for the physical justification.
 
     Attributes:
         log10wave (numpy.ndarray): Wavelength array constructed from the input arguments.
@@ -273,8 +282,28 @@ class EMSpectrum(object):
     # (typical AGN broad-line FWHM) converted to sigma via FWHM/2.355.
     BROADSIGMA_RANGE_KMS = (425.0, 4250.0)  # ⚠ MAGIC
 
+    # 2026-08-07: independent broad-line-region velocity OFFSET [km/s],
+    # applied to all seven broad (AGN-like) line centers identically,
+    # independent of zshift and broadsigma -- closes gap-analysis item
+    # 2(a)'s "broad-line AGN velocity offset." Real AGN broad lines
+    # routinely show a net centroid shift relative to systemic (defined by
+    # narrow/host-galaxy lines): high-ionization broad lines (e.g. C IV,
+    # HeII) are frequently blueshifted by ~100s-1000s km/s, understood as
+    # a signature of an accretion-disk wind/outflow rather than symmetric
+    # virial motion (Coatman et al. 2016 for C IV vs. Eddington ratio;
+    # Sulentic et al. 2000's eigenvector-1 framework more broadly ties
+    # blueshift/asymmetry to Eddington ratio across the AGN population);
+    # blueshifted [OIII]/HeII broad wings specifically are also documented
+    # in "blue outlier" AGN (Zamanov et al. 2002; Komossa et al. 2008).
+    # Occasional net redshifts are also seen in some Population B/high-
+    # mass systems, hence the range is not purely one-sided. ⚠ MAGIC: the
+    # specific bounds below are anchored on the ~100-1000 km/s blueshift
+    # scale in that literature, not a fit to any dataset -- same status as
+    # BROADSIGMA_RANGE_KMS above.
+    BROADSHIFT_KMS_RANGE = (-1000.0, 200.0)  # ⚠ MAGIC
+
     def __init__(self, minwave=3650.0, maxwave=7075.0, cdelt_kms=20.0, log10wave=None,
-                 include_mgii=False, include_new_lines=False):
+                 include_mgii=False, include_new_lines=False, include_broad_velshift=False):
 
         from importlib import resources
         from astropy.table import Table, Column, vstack
@@ -321,6 +350,7 @@ class EMSpectrum(object):
             for _newname in self.NEW_LINE_NAMES:
                 recombdata.remove_rows(np.where(recombdata['name'] == _newname)[0])
                 forbiddata.remove_rows(np.where(forbiddata['name'] == _newname)[0])
+        self.include_broad_velshift = include_broad_velshift
 
         line = vstack([recombdata,forbiddata], metadata_conflicts='silent')
 
@@ -343,7 +373,7 @@ class EMSpectrum(object):
                  oihbeta=None, siiihbeta=None, ariiihbeta=None, mgiihbeta=None,
                  vary_auxlines=False, auxline_priors=None,
                  new_line_ratios=None, new_line_broad_ratios=None,
-                 new_line_priors=None, broadsigma=None,
+                 new_line_priors=None, broadsigma=None, broadshift_kms=None,
                  linesigma=75.0, zshift=0.0, oiiflux=None, hbetaflux=None,
                  seed=None, backend='auto', device=None, dtype=None):
         """Build the actual emission-line spectrum.
@@ -430,6 +460,14 @@ class EMSpectrum(object):
                 a single shared value across all seven broad lines rather
                 than one per line -- see BROADSIGMA_RANGE_KMS's class-level
                 comment for the physical justification.
+            broadshift_kms (float, optional): Shared broad-line-region
+                velocity OFFSET [km/s] applied to all seven broad component
+                centers, independent of zshift and broadsigma (see
+                BROADSHIFT_KMS_RANGE's class-level comment). Default None:
+                forced to 0.0 unless include_broad_velshift=True was passed
+                to the constructor, in which case it draws uniformly from
+                BROADSHIFT_KMS_RANGE. Only has an effect when
+                include_new_lines=True.
             linesigma (float, optional): Intrinsic emission-line velocity width/sigma
                 (default 75 km/s).  A sensible range is [30-150].
             zshift (float, optional): Perturb the emission lines from their laboratory
@@ -591,6 +629,18 @@ class EMSpectrum(object):
                 # that constant's definition for the physical reasoning).
                 broadsigma = 10**rand.uniform(np.log10(self.BROADSIGMA_RANGE_KMS[0]),
                                                np.log10(self.BROADSIGMA_RANGE_KMS[1]))
+            if broadshift_kms is None:
+                if self.include_broad_velshift:
+                    # ⚠ MAGIC: uniform draw over BROADSHIFT_KMS_RANGE; see
+                    # that constant's definition above for the physical
+                    # reasoning.
+                    broadshift_kms = rand.uniform(*self.BROADSHIFT_KMS_RANGE)
+                else:
+                    # Backward-compatibility default: brand-new capability
+                    # on an already-deployed module, stays a no-op unless
+                    # explicitly opted into (same convention as
+                    # AbsorptionSpectrum.include_outflow_velshift).
+                    broadshift_kms = 0.0
 
             for _name in self.NEW_LINE_NAMES:
                 _prior = new_line_priors[_name]
@@ -697,7 +747,9 @@ class EMSpectrum(object):
                 broad_amp = broadtable['flux'].data / broadtable['wave'].data / np.log(10)
                 broad_norm = broad_amp / (np.sqrt(2.0 * np.pi) * broadlog10sigma)
                 broadtable['amp'] = broad_norm
-                broad_centers = np.log10(broadtable['wave'].data * (1.0 + zshift))
+                broadtable['broadshift_kms'] = broadshift_kms
+                broad_centers = (np.log10(broadtable['wave'].data * (1.0 + zshift))
+                                  + broadshift_kms / C_LIGHT / np.log(10))
 
                 if _use_torch_backend(backend):
                     emspec_broad = _lines_to_spectrum_torch(self.log10wave, broad_centers, broad_norm,

@@ -415,6 +415,101 @@ class TestNewLinesNarrowBroad(unittest.TestCase):
         np.testing.assert_allclose(emspec_np, emspec_torch, rtol=1e-6, atol=1e-30)
 
 
+class TestBroadVelshift(unittest.TestCase):
+    '''Tests for the independent broad-line-region velocity OFFSET
+    (broadshift_kms), gated behind include_broad_velshift (default False,
+    same backward-compatibility convention as
+    AbsorptionSpectrum.include_outflow_velshift -- see that module's
+    2026-08-07 docstring section). Only has an effect when
+    include_new_lines=True, since that's the only source of broad lines
+    in EMSpectrum.'''
+
+    def setUp(self):
+        self.em_new = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_new_lines=True)
+        self.em_shift = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_new_lines=True,
+                                    include_broad_velshift=True)
+        self.fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
+
+    def _broad_rows(self, line_table):
+        mask = np.array([str(n).endswith('_broad') for n in line_table['name']])
+        return line_table[mask]
+
+    def test_broadshift_off_by_default_is_noop(self):
+        '''Backward-compatibility guarantee: with include_broad_velshift
+        left at its default (False), broadshift_kms must be forced to
+        exactly 0.0 whenever not explicitly passed.'''
+        for seed in range(5):
+            _, _, line = self.em_new.spectrum(seed=seed, hbetaflux=1e-16, **self.fixed_ratios)
+            broad = self._broad_rows(line)
+            np.testing.assert_allclose(broad['broadshift_kms'].data, 0.0)
+
+    def test_include_broad_velshift_draws_within_range_and_reproducible(self):
+        _, _, lineA = self.em_shift.spectrum(seed=7, hbetaflux=1e-16, **self.fixed_ratios)
+        _, _, lineA2 = self.em_shift.spectrum(seed=7, hbetaflux=1e-16, **self.fixed_ratios)
+        broadA = self._broad_rows(lineA)
+        broadA2 = self._broad_rows(lineA2)
+        v = float(broadA['broadshift_kms'][0])
+        v2 = float(broadA2['broadshift_kms'][0])
+        self.assertAlmostEqual(v, v2, places=10)
+        self.assertGreaterEqual(v, EMSpectrum.BROADSHIFT_KMS_RANGE[0])
+        self.assertLessEqual(v, EMSpectrum.BROADSHIFT_KMS_RANGE[1])
+
+    def test_include_broad_velshift_varies_across_seeds(self):
+        draws = set()
+        for seed in range(10):
+            _, _, line = self.em_shift.spectrum(seed=seed, hbetaflux=1e-16, **self.fixed_ratios)
+            broad = self._broad_rows(line)
+            draws.add(round(float(broad['broadshift_kms'][0]), 6))
+        self.assertGreater(len(draws), 1)
+
+    def test_explicit_broadshift_kms_always_wins_regardless_of_flag(self):
+        for em in (self.em_new, self.em_shift):
+            _, _, line = em.spectrum(seed=1, hbetaflux=1e-16, broadshift_kms=-321.0,
+                                      **self.fixed_ratios)
+            broad = self._broad_rows(line)
+            np.testing.assert_allclose(broad['broadshift_kms'].data, -321.0)
+
+    def test_broadshift_moves_broad_component_but_not_narrow(self):
+        '''A nonzero broadshift_kms must move only the broad-component
+        line centers, leaving the narrow-only spectrum bit-identical
+        (isolated by forcing the broad ratio to exactly 0 in a parallel
+        pair of calls), while the full narrow+broad spectrum must actually
+        change under the shift (otherwise this test would be vacuous).'''
+        broad_ratios = {n: 0.05 for n in EMSpectrum.NEW_LINE_NAMES}
+        zero = {n: 0.0 for n in EMSpectrum.NEW_LINE_NAMES}
+        common = dict(seed=1, hbetaflux=1e-16, broadsigma=1000.0, **self.fixed_ratios)
+
+        emspec_shift0, wave, _ = self.em_new.spectrum(
+            broadshift_kms=0.0, new_line_broad_ratios=broad_ratios, **common)
+        emspec_shift_neg, _, _ = self.em_new.spectrum(
+            broadshift_kms=-800.0, new_line_broad_ratios=broad_ratios, **common)
+
+        emspec_narrow_only_shift0, _, _ = self.em_new.spectrum(
+            broadshift_kms=0.0, new_line_broad_ratios=zero, **common)
+        emspec_narrow_only_shift_neg, _, _ = self.em_new.spectrum(
+            broadshift_kms=-800.0, new_line_broad_ratios=zero, **common)
+
+        np.testing.assert_array_equal(emspec_narrow_only_shift0, emspec_narrow_only_shift_neg)
+        self.assertFalse(np.allclose(emspec_shift0, emspec_shift_neg, rtol=1e-6, atol=1e-30))
+
+    def test_broadshift_kms_backend_agreement(self):
+        kwargs = dict(seed=1, hbetaflux=1e-16, broadshift_kms=-400.0, **self.fixed_ratios)
+        emspec_np, _, _ = self.em_shift.spectrum(backend='numpy', **kwargs)
+        emspec_torch, _, _ = self.em_shift.spectrum(backend='torch', device='cpu', **kwargs)
+        np.testing.assert_allclose(emspec_np, emspec_torch, rtol=1e-6, atol=1e-30)
+
+    def test_broadshift_kms_harmless_when_new_lines_disabled(self):
+        '''include_new_lines=False means there are no broad lines to shift
+        at all -- passing broadshift_kms must be a harmless no-op (no
+        error, no effect on the output spectrum) rather than raising.'''
+        em_legacy = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_new_lines=False)
+        emspec_a, _, _ = em_legacy.spectrum(seed=1, hbetaflux=1e-16, broadshift_kms=-500.0,
+                                             **self.fixed_ratios)
+        emspec_b, _, _ = em_legacy.spectrum(seed=1, hbetaflux=1e-16, broadshift_kms=0.0,
+                                             **self.fixed_ratios)
+        np.testing.assert_array_equal(emspec_a, emspec_b)
+
+
 class TestGalaxyEWScatter(unittest.TestCase):
     '''Tests for the widened, extended D4000-coupled EW scatter (handoff
     Sec 1.4). Requires $DESI_BASIS_TEMPLATES for the statistical tests since

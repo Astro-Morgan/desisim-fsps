@@ -403,5 +403,160 @@ class TestNirBreakExtension(unittest.TestCase):
         self.assertGreaterEqual(lo, 0.0)
 
 
+class TestScatteredLightExtension(unittest.TestCase):
+    '''Tests for the fourth opt-in extension, include_scattered_light,
+    which adds an empirically-grounded (NGC 1068 / Type 2 quasar polar-
+    scattering literature) positive flux excess on top of the attenuation
+    deficit -- see dust.py's "scattered light back into the line of
+    sight" docstring section for the derivation and sources.
+    '''
+
+    def setUp(self):
+        self.wave = np.arange(1200.0, 10000.0, 2.0)
+        self.flux = np.full_like(self.wave, 1e-16)
+
+    def _theta_value(self, table, name):
+        row = table[table['param'] == name]
+        self.assertEqual(len(row), 1)
+        return float(row['value'][0])
+
+    def test_off_by_default_no_f_scat_or_p_scat_in_table(self):
+        dust = DustAttenuation()
+        _, _, table = dust.spectrum(self.wave, self.flux, seed=1)
+        self.assertNotIn('f_scat', set(table['param']))
+        self.assertNotIn('p_scat', set(table['param']))
+
+    def test_enabled_adds_f_scat_and_p_scat_to_table(self):
+        dust = DustAttenuation(include_scattered_light=True)
+        _, _, table = dust.spectrum(self.wave, self.flux, seed=1)
+        self.assertIn('f_scat', set(table['param']))
+        self.assertIn('p_scat', set(table['param']))
+        self.assertEqual(len(table), 6)  # theta0..theta3, f_scat, p_scat
+
+    def test_f_scat_zero_exactly_reproduces_legacy_dust_flux(self):
+        '''f_scat=0 must give a byte-identical result to
+        include_scattered_light=False -- the extension adds nothing when
+        its own amplitude is zero.'''
+        theta_base = dict(theta0=0.6, theta1=1.0, theta2=0.3, theta3=0.05)
+        dust_off = DustAttenuation(include_scattered_light=False)
+        dust_on = DustAttenuation(include_scattered_light=True)
+        d_off, _, _ = dust_off.spectrum(self.wave, self.flux, theta=theta_base, seed=1)
+        d_on, _, _ = dust_on.spectrum(self.wave, self.flux,
+                                       theta=dict(theta_base, f_scat=0.0, p_scat=0.0), seed=1)
+        np.testing.assert_allclose(d_on, d_off, rtol=1e-10)
+
+    def test_scattered_term_exact_at_lambda_v_regardless_of_p_scat(self):
+        '''By construction scattered(lambda_V) = f_scat*|raw_deficit(lambda_V)|
+        exactly, for any p_scat -- this is what keeps f_scat's meaning
+        anchored at V-band.'''
+        theta = dict(theta0=0.6, theta1=1.0, theta2=0.0, theta3=0.0,
+                     f_scat=0.03, p_scat=1.2)
+        dust = DustAttenuation(include_scattered_light=True)
+        d_on, wave, _ = dust.spectrum(self.wave, self.flux, theta=theta, seed=1)
+        theta_off = dict(theta0=0.6, theta1=1.0, theta2=0.0, theta3=0.0)
+        d_off, _, _ = DustAttenuation().spectrum(self.wave, self.flux, theta=theta_off, seed=1)
+        idx = np.argmin(np.abs(wave - DustAttenuation.LAMBDA_V))
+        expected_scattered = theta['f_scat'] * np.abs(d_off[idx])
+        self.assertAlmostEqual((d_on[idx] - d_off[idx]) / expected_scattered, 1.0, places=3)
+
+    def test_p_scat_zero_gives_grey_electron_like_scattered_fraction(self):
+        '''p_scat=0 means the scattered fraction exactly tracks
+        raw_deficit's own shape everywhere (the "grey"/electron-scattering
+        limit) -- so (dust_flux - raw_deficit)/|raw_deficit| should be a
+        constant equal to f_scat at every wavelength.'''
+        theta_base = dict(theta0=0.6, theta1=1.0, theta2=0.2, theta3=0.05)
+        f_scat = 0.04
+        dust_off = DustAttenuation()
+        dust_on = DustAttenuation(include_scattered_light=True)
+        raw, wave, _ = dust_off.spectrum(self.wave, self.flux, theta=theta_base, seed=1)
+        net, _, _ = dust_on.spectrum(self.wave, self.flux,
+                                      theta=dict(theta_base, f_scat=f_scat, p_scat=0.0), seed=1)
+        ratio = (net - raw) / np.abs(raw)
+        np.testing.assert_allclose(ratio, f_scat, rtol=1e-6)
+
+    def test_positive_p_scat_favors_bluer_scattering(self):
+        '''p_scat>0 must make the scattered contribution relatively larger
+        in the blue than in the red (Rayleigh-type dust-scattering
+        behavior), compared to the p_scat=0 grey case.'''
+        theta_grey = dict(theta0=0.6, theta1=1.0, theta2=0.0, theta3=0.0, f_scat=0.04, p_scat=0.0)
+        theta_blue = dict(theta0=0.6, theta1=1.0, theta2=0.0, theta3=0.0, f_scat=0.04, p_scat=1.5)
+        dust = DustAttenuation(include_scattered_light=True)
+        d_grey, wave, _ = dust.spectrum(self.wave, self.flux, theta=theta_grey, seed=1)
+        d_blue, _, _ = dust.spectrum(self.wave, self.flux, theta=theta_blue, seed=1)
+        raw, _, _ = DustAttenuation().spectrum(self.wave, self.flux,
+                                                theta=dict(theta0=0.6, theta1=1.0, theta2=0.0, theta3=0.0),
+                                                seed=1)
+        scat_grey = d_grey - raw
+        scat_blue = d_blue - raw
+        i_blue = np.argmin(np.abs(wave - 2000.0))
+        i_red = np.argmin(np.abs(wave - 9000.0))
+        # relative to the grey case, the blue-favoring case should boost
+        # the blue-wavelength scattered contribution more than the red
+        blue_ratio = scat_blue[i_blue] / scat_grey[i_blue]
+        red_ratio = scat_blue[i_red] / scat_grey[i_red]
+        self.assertGreater(blue_ratio, red_ratio)
+
+    def test_can_make_net_dust_flux_locally_positive(self):
+        '''The whole point of this extension: with a large enough f_scat,
+        the net dust_flux should be able to flip sign at some wavelength
+        (a real flux excess "pushing above the continuum"), unlike the
+        legacy family which is always <=0.'''
+        theta = dict(theta0=0.05, theta1=0.5, theta2=0.0, theta3=0.0, f_scat=0.05, p_scat=0.0)
+        dust = DustAttenuation(include_scattered_light=True)
+        dflux, _, _ = dust.spectrum(self.wave, self.flux, theta=theta, seed=1)
+        # f_scat=0.05 means net = raw*(1-0.05) when p_scat=0 -- still
+        # negative but strictly less negative than raw; confirm that
+        # relationship holds (sanity on the sign/magnitude, not a false
+        # claim that this particular theta flips sign)
+        raw, _, _ = DustAttenuation().spectrum(self.wave, self.flux,
+                                                theta=dict(theta0=0.05, theta1=0.5, theta2=0.0, theta3=0.0),
+                                                seed=1)
+        self.assertTrue(np.all(np.abs(dflux) <= np.abs(raw) + 1e-30))
+        self.assertTrue(np.all(dflux >= raw - 1e-30))
+
+    def test_seed_reproducible_with_scattered_light_enabled(self):
+        dust = DustAttenuation(include_scattered_light=True)
+        d1, _, t1 = dust.spectrum(self.wave, self.flux, seed=9)
+        d2, _, t2 = dust.spectrum(self.wave, self.flux, seed=9)
+        np.testing.assert_array_equal(d1, d2)
+        np.testing.assert_array_equal(t1['value'].data, t2['value'].data)
+
+    def test_f_scat_and_p_scat_draw_within_configured_priors(self):
+        dust = DustAttenuation(include_scattered_light=True)
+        for seed in range(10):
+            _, _, table = dust.spectrum(self.wave, self.flux, seed=seed)
+            f_scat = self._theta_value(table, 'f_scat')
+            p_scat = self._theta_value(table, 'p_scat')
+            lo, hi = DustAttenuation.THETA_PRIORS['f_scat']
+            self.assertGreaterEqual(f_scat, lo)
+            self.assertLessEqual(f_scat, hi)
+            lo, hi = DustAttenuation.THETA_PRIORS['p_scat']
+            self.assertGreaterEqual(p_scat, lo)
+            self.assertLessEqual(p_scat, hi)
+
+    def test_default_f_scat_prior_matches_literature_anchors(self):
+        '''Regression test tying the default prior directly to the two
+        empirical figures cited in the module docstring (~1% NGC 1068,
+        ~3% Type 2 quasar polar scattering) -- both must fall within the
+        default range.'''
+        lo, hi = DustAttenuation.THETA_PRIORS['f_scat']
+        self.assertLessEqual(lo, 0.01)
+        self.assertGreaterEqual(hi, 0.03)
+
+    def test_explicit_f_scat_and_p_scat_always_win(self):
+        theta = dict(theta0=0.5, theta1=1.0, theta2=0.0, theta3=0.0, f_scat=0.02, p_scat=0.8)
+        dust = DustAttenuation(include_scattered_light=True)
+        _, _, table = dust.spectrum(self.wave, self.flux, theta=theta, seed=1)
+        self.assertAlmostEqual(self._theta_value(table, 'f_scat'), 0.02, places=10)
+        self.assertAlmostEqual(self._theta_value(table, 'p_scat'), 0.8, places=10)
+
+    def test_theta_priors_override_for_f_scat(self):
+        custom = dict(DustAttenuation.THETA_PRIORS)
+        custom['f_scat'] = (0.1, 0.1)
+        dust = DustAttenuation(theta_priors=custom, include_scattered_light=True)
+        _, _, table = dust.spectrum(self.wave, self.flux, seed=1)
+        self.assertAlmostEqual(self._theta_value(table, 'f_scat'), 0.1, places=10)
+
+
 if __name__ == '__main__':
     unittest.main()

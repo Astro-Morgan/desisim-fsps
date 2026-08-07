@@ -51,34 +51,32 @@ implemented and tested elsewhere in this fork):
   - narrow_emission, broad_emission: EMSpectrum (templates.py).
   - ism_absorption: AbsorptionSpectrum (absorption.py).
   - dust_flux: DustAttenuation (dust.py) -- called once per blended
-    component (galaxy, QSO) per its own module docstring.
+    component (galaxy, QSO) per its own module docstring. As of
+    2026-08-06, DustAttenuation's own optional `include_scattered_light`
+    flag folds the dust-scattering-into-LOS excess (see below) directly
+    into this same returned array, so dust_flux is no longer guaranteed
+    non-positive when that flag is on -- this is intentional, not a bug.
 
-One piece of the PI's scheme is NOT yet implemented and is passed into
-this module as an optional (default None/zero) placeholder until built:
-  - dust_scatter_excess: dust/electron scattering redirecting light back
-    INTO the line of sight (e.g. polar-scattered light in Type 2 AGN),
-    appearing as a positive flux excess -- a physically distinct process
-    from the light DustAttenuation already removes from the direct LOS
-    (which folds in both true absorption and out-scattering, per the
-    standard extinction-curve convention). Per PI direction (2026-08-06),
-    two things remain genuinely open here, not yet resolved: (1) whether
-    the excess is better classified as continuum-like (smooth, broadband,
-    as in the Type 2 AGN polar-scattering literature) or emission-like
-    (tied to specific resonant-line radiative transfer), and (2) whether
-    it is ever strong enough in realistic DESI-relevant geometries to
-    partially offset the same-wavelength flux loss from out-scattering,
-    or is always sub-dominant. Leaning candidate (not yet implemented,
-    not yet confirmed with the PI): pair this with DustAttenuation itself
-    as a new opt-in `scattered_flux` output -- a fraction f_scat of the
-    same |dust_flux| light removed from a given component's LOS,
-    re-appearing as a positive term with its own (bluer-favoring, per
-    Rayleigh-like scattering-efficiency scaling) wavelength dependence --
-    which would guarantee self-consistency (can never scatter back in
-    more than was removed) and sidesteps the continuum-vs-emission
-    classification question by keeping the net dust effect
-    (dust_flux + scattered_flux) together in the "absorption" bucket,
-    simply no longer guaranteed non-positive. Not implemented; needs
-    sign-off before building.
+RESOLVED (2026-08-06): the dust-scattering-into-LOS excess -- dust/
+electron scattering redirecting light back INTO the line of sight (e.g.
+polar-scattered light in Type 2 AGN), appearing as a positive flux excess
+-- no longer needs a separate `dust_scatter_excess` input. Per PI
+direction, this was resolved by grounding it empirically (searched
+2026-08-06: NGC 1068's scattered/polarized flux is ~1% of total, Type 2
+quasar polar scattering ~3% of intrinsic continuum -- see dust.py's
+"scattered light back into the line of sight" docstring section for
+sources) and pairing it directly with DustAttenuation itself, as a
+fraction f_scat of the same |dust_flux| light already being removed from
+a component's LOS -- self-consistent by construction (can never scatter
+back more than was removed at the reference wavelength) and sidestepping
+the continuum-vs-emission classification question entirely: the net dust
+effect (attenuation deficit plus scattered excess) stays in the
+"absorption" bucket via the SAME `dust_flux` argument already accepted
+here, simply no longer guaranteed non-positive when
+DustAttenuation(include_scattered_light=True) is used. The
+`dust_scatter_excess` keyword below is kept only for forward-compatible
+generality (e.g. a future, non-dust-coupled scattering mechanism) and is
+not expected to be needed for this specific effect.
 
 BAL troughs are intentionally NOT summed by this module yet: bal.py's
 existing mechanism selects and multiplies a whole real-observed BAL

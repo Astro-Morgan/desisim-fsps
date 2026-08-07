@@ -171,6 +171,94 @@ boundary-pinned fit already closes the gap by an order of magnitude.
 See test_dust.py's TestNirBreakExtension for the corresponding tests.
 
 --------------------------------------------------------------------------
+2026-08-06 (cont'd): scattered light back into the line of sight
+--------------------------------------------------------------------------
+A fourth OPT-IN extension, `include_scattered_light=True` (default False),
+accounts for a physically distinct process from everything above: dust
+(or free-electron) scattering that redirects light from OUTSIDE the direct
+line of sight back INTO it, appearing as a positive flux excess partially
+offsetting the light this module already removes. This is real,
+well-documented physics -- most cleanly seen in Type 2 (obscured)
+AGN/quasars, where polar or equatorial-funnel scattering off dust/free
+electrons is literally how the hidden broad-line region and nuclear
+continuum are detected at all (Antonucci & Miller 1985's original
+discovery of a hidden Seyfert 1 nucleus in NGC 1068's polarized flux) --
+but it is a genuinely different mechanism from simple attenuation (which
+this module's k(lambda;theta) already fully captures, absorption and
+out-scattering combined, per the standard extinction-curve convention),
+so it is added as a correction ON TOP of the existing flux deficit rather
+than folded into k(lambda) itself.
+
+Empirically grounded (searched 2026-08-06, since an ungrounded free
+parameter here would just be guessing): scattered-light contributions are
+consistently a SMALL fraction of the total observed flux, not a dominant
+one, even in the most favorable (highly inclined, heavily obscured)
+geometries --
+  - NGC 1068 (the archetypal Seyfert 2): the polarized (scattered) Type 1
+    flux is roughly 100x fainter than the dominant unpolarized Type 2
+    light in total flux, i.e. ~1% of the total -- from HST UV
+    spectropolarimetry (Antonucci, Hurt & Miller 1994-era work; see
+    Sources below).
+  - High-inclination Type 2 quasars: only ~3% of the intrinsic quasar
+    continuum flux is detectable via polar scattering (see Sources).
+  - Wavelength dependence differs by mechanism: free-electron (Thomson)
+    scattering gives WAVELENGTH-INDEPENDENT ("grey") behavior (NGC 1068
+    shows ~16% constant polarization shortward of 2700A, the classic
+    electron-scattering signature); dust (Rayleigh-type) scattering rises
+    toward shorter wavelengths instead (bluer).
+
+This directly grounds the model: rather than a separate parametric family
+or a forced continuum-vs-emission classification (neither of which the
+scattering literature actually demands -- scattered light is not tied to
+specific line profiles, and folding it into "continuum" vs "emission"
+would be an arbitrary bookkeeping choice this module avoids), the
+scattered-light excess is defined as a fraction of the SAME light this
+module already removes, guaranteeing self-consistency (can never scatter
+back in more than was taken out, at the reference wavelength) and
+requiring no new functional family:
+
+    raw_deficit(lambda) = flux_in(lambda) * (T(lambda) - 1)      [as before, <=0]
+    scattered(lambda)   = f_scat * |raw_deficit(lambda)| * (lambda/lambda_V)^(-p_scat)
+    dust_flux(lambda)   = raw_deficit(lambda) + scattered(lambda)
+
+with f_scat drawn from THETA_PRIORS['f_scat'] (default range (0.0, 0.05),
+anchored directly on the ~1-3% figures above, with modest headroom) and
+p_scat from THETA_PRIORS['p_scat'] (default range (0.0, 2.0): p_scat=0
+reproduces electron-scattering-like grey behavior -- the scattered
+fraction exactly tracks whatever shape raw_deficit already has -- while
+p_scat>0 adds additional blueward weighting for dust-Rayleigh-like
+scattering, matching the "rising to short wavelengths" behavior found in
+NGC 1068's dust-scattered component). By construction scattered(lambda_V)
+= f_scat*|raw_deficit(lambda_V)| exactly, so f_scat keeps a clean
+V-band-referenced meaning regardless of p_scat.
+
+Honest caveat: because scattered(lambda) and raw_deficit(lambda) do not
+share identical wavelength shapes once p_scat != 0, dust_flux's sign is
+NOT guaranteed to stay non-positive everywhere once this extension is on
+(the whole point -- a real net flux excess at some wavelengths is exactly
+what "pushes above the continuum" describes), and at extreme corners of
+the prior space |scattered(lambda)| could locally exceed |raw_deficit(lambda)|
+away from lambda_V. Given the conservative, literature-anchored default
+f_scat range this is unlikely to matter in practice, but is flagged here
+rather than silently clipped, consistent with this module's "reach over
+built-in guardrails" philosophy elsewhere. This extension does not change
+which OUTPUT BUCKET the result lands in -- per decompose.py's grouping,
+the net dust_flux (attenuation deficit plus any scattered excess) stays
+in the "absorption" bucket as a single, already-self-consistent number,
+avoiding the need to split this effect across continuum/emission.
+
+Sources:
+- Type 2 quasar polar-scattering fraction (~3%):
+  https://academic.oup.com/mnras/article/368/2/707/984933 and related
+  torus/polar-scattering literature (searched 2026-08-06).
+- NGC 1068 HST UV spectropolarimetry (~1% scattered fraction, ~16% grey
+  electron-scattering polarization shortward of 2700A):
+  https://ui.adsabs.harvard.edu/abs/1994ApJ...430..210A/abstract
+- Dust (Rayleigh-type) scattering rising to short wavelengths in NGC 1068:
+  Miller, Goodrich & Mathews (1991), discussed in
+  https://arxiv.org/pdf/astro-ph/9905093
+
+--------------------------------------------------------------------------
 Universality across galaxies and QSOs
 --------------------------------------------------------------------------
 This module deliberately does NOT special-case "galaxy dust" vs "QSO/AGN
@@ -414,17 +502,38 @@ class DustAttenuation(object):
         # true red/NIR behavior of real curves is less well-constrained
         # than the blue/UV slope in this project's priors so far.
         'theta5': (0.0, 3.0),
+        # Scattered-light fraction at lambda_V (only used when
+        # include_scattered_light=True). NOT MAGIC -- anchored directly on
+        # real measurements: NGC 1068's scattered/polarized Type 1 flux is
+        # ~1% of the total (HST UV spectropolarimetry), and highly
+        # inclined Type 2 quasars show ~3% of the intrinsic continuum
+        # detectable via polar scattering (see module docstring's
+        # "scattered light" section for sources). (0.0, 0.05) covers both
+        # figures with modest headroom rather than an arbitrary guess.
+        'f_scat': (0.0, 0.05),
+        # Scattered-light wavelength-dependence exponent (only used when
+        # include_scattered_light=True). (Y) MAGIC range, but the
+        # endpoints are literature-motivated: p_scat=0 matches NGC 1068's
+        # observed wavelength-independent (~16%, shortward of 2700A)
+        # electron-scattering polarization; p_scat>0 adds the blueward
+        # rise documented for NGC 1068's separate dust (Rayleigh-type)
+        # scattering component. Upper bound of 2.0 mirrors theta1's own
+        # power-law-slope range rather than a dedicated measurement.
+        'p_scat': (0.0, 2.0),
     }
 
     def __init__(self, theta_priors=None, lambda_v=None, lambda_bump=None, bump_width=None,
                  vary_bump_shape=False, include_fuv_curvature=False, include_nir_break=False,
+                 include_scattered_light=False,
                  bump_center_range=None, bump_width_range=None, break_wave_range=None):
         """
         Args:
             theta_priors (dict, optional): override THETA_PRIORS, mapping
-                'theta0'..'theta5' -> (low, high) uniform-draw bounds
-                ('theta4' only consulted if include_fuv_curvature=True;
-                'theta5' only consulted if include_nir_break=True).
+                'theta0'..'theta5'/'f_scat'/'p_scat' -> (low, high)
+                uniform-draw bounds ('theta4' only consulted if
+                include_fuv_curvature=True; 'theta5' only consulted if
+                include_nir_break=True; 'f_scat'/'p_scat' only consulted
+                if include_scattered_light=True).
             lambda_v (float, optional): override LAMBDA_V.
             lambda_bump, bump_width (float, optional): fixed bump center/
                 width used when vary_bump_shape=False (the default);
@@ -444,6 +553,14 @@ class DustAttenuation(object):
                 power-law term with a smoothly-broken power law (theta1
                 blueward of a free break wavelength, theta5 redward of it
                 -- see module docstring's "closing the red/near-IR gap").
+            include_scattered_light (bool, optional): default False
+                (legacy behavior, no scattered-light term). If True, adds
+                an empirically-grounded (NGC 1068/Type 2 quasar polar-
+                scattering) positive flux excess on top of the attenuation
+                deficit -- see module docstring's "scattered light back
+                into the line of sight" section. Can make the returned
+                dust_flux locally non-negative at some wavelengths (by
+                design -- that is the physical effect being modeled).
             bump_center_range, bump_width_range (tuple, optional): override
                 BUMP_CENTER_RANGE/BUMP_WIDTH_RANGE (only consulted if
                 vary_bump_shape=True).
@@ -457,6 +574,7 @@ class DustAttenuation(object):
         self.vary_bump_shape = vary_bump_shape
         self.include_fuv_curvature = include_fuv_curvature
         self.include_nir_break = include_nir_break
+        self.include_scattered_light = include_scattered_light
         self.bump_center_range = bump_center_range if bump_center_range is not None else self.BUMP_CENTER_RANGE
         self.bump_width_range = bump_width_range if bump_width_range is not None else self.BUMP_WIDTH_RANGE
         self.break_wave_range = break_wave_range if break_wave_range is not None else self.BREAK_WAVE_RANGE
@@ -489,12 +607,16 @@ class DustAttenuation(object):
 
         Returns:
             Tuple of (dust_flux, wave, theta_table), where dust_flux is an
-            additive flux-deficit array [npix] (<=0 everywhere, same units
-            as flux_in) such that flux_in + dust_flux reproduces
-            flux_in * 10**(-0.4*k(wave;theta)); wave is the input wave
+            additive array [npix] (same units as flux_in) such that, with
+            include_scattered_light off (the default), flux_in + dust_flux
+            reproduces flux_in * 10**(-0.4*k(wave;theta)) exactly and
+            dust_flux is <=0 everywhere; with include_scattered_light on,
+            dust_flux is the attenuation deficit PLUS an empirically-
+            grounded scattered-light excess (see module docstring), and is
+            no longer guaranteed non-positive. wave is the input wave
             array, unchanged; theta_table is a Table with the resolved
-            parameter values used (4 rows by default, up to 6 with both
-            extensions enabled).
+            parameter values used (4 rows by default, up to 8 with every
+            extension enabled).
         """
         from astropy.table import Table
 
@@ -507,6 +629,8 @@ class DustAttenuation(object):
             param_names.append('theta4')
         if self.include_nir_break:
             param_names.append('theta5')
+        if self.include_scattered_light:
+            param_names += ['f_scat', 'p_scat']
 
         resolved = {}
         for name in param_names:
@@ -552,6 +676,18 @@ class DustAttenuation(object):
 
         transmission = 10.0 ** (-0.4 * k)
         dust_flux = flux_in * (transmission - 1.0)
+
+        if self.include_scattered_light:
+            # See module docstring's "scattered light back into the line
+            # of sight" section for the derivation and the empirical
+            # (NGC 1068 / Type 2 quasar polar-scattering) grounding of
+            # f_scat's default prior range. Defined relative to the SAME
+            # raw_deficit computed above -- guarantees self-consistency
+            # (scattered(lambda_V) = f_scat*|raw_deficit(lambda_V)|
+            # exactly) with no new functional family required.
+            scattered = (resolved['f_scat'] * np.abs(dust_flux)
+                         * (wave / self.lambda_v) ** (-resolved['p_scat']))
+            dust_flux = dust_flux + scattered
 
         table_rows = [(name, resolved[name]) for name in param_names]
         if self.vary_bump_shape:

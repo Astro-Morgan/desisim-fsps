@@ -46,18 +46,22 @@ class TestCombineIntoChannels(unittest.TestCase):
         self.assertTrue(out['components']['broad_emission'])
         self.assertTrue(out['components']['dust_scatter_excess'])
 
-    def test_absorption_bucket_sums_ism_dust_and_bal(self):
-        '''The PI's clarified grouping: ISM/CGM absorption, BAL, and dust
+    def test_absorption_bucket_sums_ism_associated_dust_and_bal(self):
+        '''The PI's clarified grouping: ISM/CGM absorption, the stochastic
+        multi-system associated-absorption channel, BAL, and dust
         attenuation deficit all land in the SAME output bucket, even
-        though they remain three independently-computed input arrays.'''
+        though they remain four independently-computed input arrays.'''
         cont = self._const(1.0)
         ism = self._const(-0.1)
+        associated = self._const(-0.03)
         dust = self._const(-0.2)
         bal = self._const(-0.05)
         out = combine_into_channels(self.wave, cont, ism_absorption=ism,
+                                     associated_absorption_flux=associated,
                                      dust_flux=dust, bal_flux=bal)
-        np.testing.assert_array_equal(out['absorption'], ism + dust + bal)
+        np.testing.assert_array_equal(out['absorption'], ism + associated + dust + bal)
         self.assertTrue(out['components']['ism_absorption'])
+        self.assertTrue(out['components']['associated_absorption_flux'])
         self.assertTrue(out['components']['dust_flux'])
         self.assertTrue(out['components']['bal_flux'])
 
@@ -78,7 +82,8 @@ class TestCombineIntoChannels(unittest.TestCase):
         cont = self._const(1.0)
         out = combine_into_channels(self.wave, cont)
         for key in ('continuum_agn', 'narrow_emission', 'broad_emission',
-                    'dust_scatter_excess', 'ism_absorption', 'dust_flux', 'bal_flux'):
+                    'dust_scatter_excess', 'ism_absorption', 'associated_absorption_flux',
+                    'dust_flux', 'bal_flux'):
             self.assertFalse(out['components'][key])
 
     def test_mismatched_length_array_raises(self):

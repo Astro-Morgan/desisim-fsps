@@ -12,8 +12,8 @@ downstream NPE:
     emission  = narrow lines + broad lines
                 (+ any dust-scattering excess pushed above the continuum
                  -- physical mechanism not yet finalized, see Open items)
-    absorption = ISM/CGM narrow absorption + BAL troughs
-                 + dust attenuation (flux deficit)
+    absorption = ISM/CGM narrow absorption + associated absorber systems
+                 + BAL troughs + dust attenuation (flux deficit)
 
 --------------------------------------------------------------------------
 Why dust moves into the "absorption" bucket here
@@ -50,6 +50,14 @@ implemented and tested elsewhere in this fork):
     baked-in dust extinction feature).
   - narrow_emission, broad_emission: EMSpectrum (templates.py).
   - ism_absorption: AbsorptionSpectrum (absorption.py).
+  - associated_absorption_flux: AssociatedAbsorberSystems
+    (associated_absorption.py, added 2026-08-06) -- stochastic, multi-
+    system narrow QSO associated absorption (Mg II/C IV/Si IV/etc.,
+    Poisson-process count and velocity placement, Maxwell-Boltzmann
+    per-system velocity dispersion). A genuinely different statistical
+    object from ism_absorption (which is one shared-kinematic draw of a
+    fixed line set), landing in the same "absorption" bucket since both
+    are non-stellar, non-dust LOS light removal.
   - dust_flux: DustAttenuation (dust.py) -- called once per blended
     component (galaxy, QSO) per its own module docstring. As of
     2026-08-06, DustAttenuation's own optional `include_scattered_light`
@@ -82,13 +90,21 @@ BAL troughs are intentionally NOT summed by this module yet: bal.py's
 existing mechanism selects and multiplies a whole real-observed BAL
 transmission template onto the spectrum (a multiplicative correction, not
 an additive flux-deficit array), so it cannot be summed alongside the
-other three additive absorption terms without first computing a residual
+other additive absorption terms without first computing a residual
 (BAL-on spectrum minus BAL-off spectrum) the way simqso's own multiplicative
-emission features are reconciled to additive form (see below) -- or,
-preferably, once task #17's independent parametric/stochastic BAL model
-(a genuinely additive channel, in the spirit of AbsorptionSpectrum) lands.
-A `bal_flux` keyword is provided for forward-compatibility but is None by
-default and simply omitted from the absorption sum if not supplied.
+emission features are reconciled to additive form (see below). Unlike an
+earlier draft of this docstring, there is no longer a separate tracked
+task to build an additive parametric BAL model -- the PI clarified
+(2026-08-06) that what had been split into "parametric/stochastic BAL"
+and "two-component dust" tasks was actually ONE thing: the stochastic
+multi-system associated-absorption model now implemented in
+associated_absorption.py (see above). BAL (broad, blended, several-
+thousand-km/s troughs) and associated absorption (narrow, discrete,
+per-system kinematics) remain physically and computationally distinct;
+bal.py's whole-template mechanism is untouched and has no currently
+planned additive replacement. A `bal_flux` keyword is provided for
+forward-compatibility but is None by default and simply omitted from the
+absorption sum if not supplied.
 
 --------------------------------------------------------------------------
 Note on simqso's own additive/multiplicative convention
@@ -122,13 +138,13 @@ import numpy as np
 
 
 def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_emission=None,
-                           ism_absorption=None, dust_flux=None,
+                           ism_absorption=None, associated_absorption_flux=None, dust_flux=None,
                            continuum_agn=None, dust_scatter_excess=None, bal_flux=None):
     """Group already-generated additive channels into the PI-specified
     3-bucket decomposition (continuum / emission / absorption), plus the
     total. See module docstring for exactly what belongs in each bucket
-    and which pieces (continuum_agn, dust_scatter_excess, bal_flux) are
-    not yet implemented elsewhere in this fork.
+    and which pieces (dust_scatter_excess, bal_flux) are not yet
+    implemented elsewhere in this fork.
 
     Args:
         wave (ndarray): common wavelength grid [npix] every array below is
@@ -141,6 +157,10 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
         ism_absorption (ndarray, optional): additive ISM/CGM absorption
             flux deficit from AbsorptionSpectrum (<=0 convention). Default:
             zero.
+        associated_absorption_flux (ndarray, optional): additive stochastic
+            multi-system QSO associated-absorption flux deficit from
+            AssociatedAbsorberSystems.spectrum() (associated_absorption.py,
+            <=0 convention). Default: zero.
         dust_flux (ndarray, optional): additive dust attenuation flux
             deficit from DustAttenuation (<=0 convention). If attenuating a
             QSO/galaxy blend, sum each component's own DustAttenuation
@@ -150,12 +170,13 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
             continuum, from AGNPowerLawContinuum.spectrum() (agn_continuum.py).
             Per PI direction, the target continuum bucket is exactly
             continuum_stellar + continuum_agn. Default: zero.
-        dust_scatter_excess (ndarray, optional): dust-scattering-into-LOS
-            excess flux. NOT YET IMPLEMENTED -- mechanism/classification
-            pending PI sign-off (see module docstring's "Open items").
-            Default: zero.
-        bal_flux (ndarray, optional): forward-compatible slot for an
-            eventual additive parametric BAL channel (task #17). bal.py's
+        dust_scatter_excess (ndarray, optional): forward-compatible slot
+            for a future, non-dust-coupled scattering mechanism (the
+            dust-coupled case is already handled via DustAttenuation's own
+            include_scattered_light flag -- see module docstring's
+            "RESOLVED" note). Default: zero.
+        bal_flux (ndarray, optional): forward-compatible slot for a future
+            additive BAL channel, should one ever be built. bal.py's
             *current* whole-template multiplicative mechanism should NOT
             be passed here (see module docstring's BAL note). Default: zero
             (omitted from the sum).
@@ -185,12 +206,13 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
     broad_emission_arr, has_broad = _resolve('broad_emission', broad_emission)
     dust_scatter_arr, has_dust_scatter = _resolve('dust_scatter_excess', dust_scatter_excess)
     ism_absorption_arr, has_ism = _resolve('ism_absorption', ism_absorption)
+    associated_absorption_arr, has_associated = _resolve('associated_absorption_flux', associated_absorption_flux)
     dust_flux_arr, has_dust = _resolve('dust_flux', dust_flux)
     bal_flux_arr, has_bal = _resolve('bal_flux', bal_flux)
 
     continuum = continuum_stellar_arr + continuum_agn_arr
     emission = narrow_emission_arr + broad_emission_arr + dust_scatter_arr
-    absorption = ism_absorption_arr + dust_flux_arr + bal_flux_arr
+    absorption = ism_absorption_arr + associated_absorption_arr + dust_flux_arr + bal_flux_arr
     total = continuum + emission + absorption
 
     components = {
@@ -200,6 +222,7 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
         'broad_emission': has_broad,
         'dust_scatter_excess': has_dust_scatter,
         'ism_absorption': has_ism,
+        'associated_absorption_flux': has_associated,
         'dust_flux': has_dust,
         'bal_flux': has_bal,
     }

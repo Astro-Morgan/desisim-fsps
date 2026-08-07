@@ -7,7 +7,7 @@ ground truth for QSO spectra: an independently-drawn NUMBER of discrete
 absorbing systems, each at its own blueshifted velocity offset relative
 to the QSO systemic redshift and its own velocity dispersion, each
 imprinting a common set of UV resonance transitions (Mg II, C IV, Si IV,
-Ne VIII, C III], ...) at that system's shared kinematics.
+O VI, C III], ...) at that system's shared kinematics.
 
 --------------------------------------------------------------------------
 Why this exists / what it replaces
@@ -105,32 +105,55 @@ cloud) -- identical convention to AbsorptionSpectrum's per-line tau0 draws.
 
 Default transitions (LINE_WAVE_VACUUM below), per the PI's explicit list
 ("primarily MgII, but also CIII] and CIV and Ne and Si and Ar etc"):
-  - Mg II 2796.352 / 2803.530 (doublet; same vacuum values as
-    absorption.py's ISM Mg II absorption, reused for consistency).
-  - C IV 1548.204 / 1550.781 (doublet; standard vacuum values, NIST ASD).
-  - Si IV 1393.755 / 1402.770 (doublet; standard vacuum values).
-  - C III] 1908.734 (semi-forbidden singlet). NOTE: this transition is
-    much more commonly seen in EMISSION (it is the classic semi-forbidden
-    "C III]" nebular/BLR line) than in absorption -- included here
-    verbatim per explicit PI direction, flagged as an atypical but
-    PI-requested inclusion rather than a literature-standard associated-
-    absorption transition.
-  - Ne VIII 770.409 / 780.324 (doublet). "Ne" was underspecified in the
-    PI's list; Ne VIII is the best-motivated literature candidate for a
-    UV resonance doublet seen in exactly this context (high-ionization
-    AGN/associated-absorber and WHIM tracer studies, e.g. HST/COS UV
-    spectroscopy of associated/intervening systems) -- flagged as a
-    best-available interpretation, not a confirmed match to what the PI
-    had in mind, and easily swapped via include_transitions/
-    LINE_WAVE_VACUUM overrides if a different Ne ion was intended.
-  - Ar I 1048.220 / 1066.660 (doublet). "Ar" was similarly underspecified;
-    Ar I is the standard candidate appearing in the neutral/low-ionization
-    UV absorption-line literature (more commonly discussed for damped
-    Lyman-alpha systems than associated QSO outflows specifically) --
-    flagged with the same caveat as Ne VIII above.
-Both the Ne VIII and Ar I choices should be treated as placeholders to be
-confirmed or corrected, not settled literature defaults, unlike the Mg
-II/C IV/Si IV/C III] wavelengths (all standard, unambiguous).
+2026-08-07 UPDATE: the PI provided the exact, authoritative source this
+list should match -- the desihub/prospect viewer's own
+absorption_lines.txt/emission_lines.txt data files (the same line
+definitions used by the legacysurvey.org DESI spectrum viewer). The
+default transition list below is now built directly from those files
+(every entry with vacuum wavelength < Mg II's 2796.35A), replacing the
+earlier ad hoc guesses (a previous version of this module included
+speculative Ne VIII/Ar I doublets as placeholder interpretations of the
+PI's underspecified "Ne"/"Ar" -- both are DROPPED now that the
+authoritative list is available and does not include either ion).
+
+From prospect's absorption_lines.txt (curated absorption transitions,
+included verbatim -- these are real, standard interstellar/CGM/associated
+absorption features, e.g. the classic Fe II UV1/UV2/UV3-multiplet lines
+routinely seen alongside Mg II absorbers):
+    Si II 1260.4221, O I 1302.1685, Si II 1304.3702, C II 1334.5323,
+    Si IV 1393.75/1402.77, S V 1501.76, Si II 1526.7070, C IV 1549.48,
+    Fe II 1608.4509, Al II 1670.788, Si II 1808.0129,
+    Al III 1854.7183/1862.7911, Mg I 2026.4768,
+    Fe II 2344.2130/2374.4603/2382.7642/2389.2396,
+    Mg II 2796.3543/2803.5315 (the doublet itself, kept as the reference
+    transition around which "blueward" is defined).
+
+From prospect's emission_lines.txt, only the subset that are genuine
+PERMITTED/RESONANCE transitions (i.e. plausible in absorption -- connect
+to the ground state with a real oscillator strength) is added; the
+file's forbidden/semi-forbidden/fluorescent/recombination entries
+([Ne IV], C II], O III], Si III], He II 1640, and the excited-state
+"Si II*" fluorescent lines) are excluded as not being physically sensible
+ground-state absorbers:
+    Ly-beta 1025.18, Ly-alpha 1215.67, N V (true doublet
+    1238.821/1242.804, used here in place of the viewer's single blended
+    "N V 1240" marker for consistency with how every other doublet in
+    this module is treated), C III] 1908.734 (semi-forbidden; RETAINED
+    per explicit PI direction from the original request despite being
+    atypical for absorption -- flagged as before).
+
+One addition beyond the viewer's own list, per the PI's explicit "plus
+any others its missing": O VI 1031.93/1037.62 (doublet). This is the
+single most standard, well-precedented high-ionization associated/
+intrinsic-absorption doublet in the QSO literature (routinely discussed
+alongside N V/C IV in mini-BAL and associated-absorber studies) that the
+viewer's own list happens not to include -- a well-justified, not
+speculative, addition (unlike the earlier dropped Ne VIII/Ar I guesses).
+
+All wavelengths above are exactly as provided in the PI's
+absorption_lines.txt/emission_lines.txt excerpt (2026-08-07), except
+O VI (standard NIST ASD vacuum values) and the N V doublet split
+(standard NIST ASD components of the viewer's blended 1240.81 marker).
 
 --------------------------------------------------------------------------
 Additive-flux-deficit convention (same pattern as absorption.py)
@@ -176,24 +199,56 @@ class AssociatedAbsorberSystems(object):
     velocity dispersion) and the per-transition line list.
     """
 
-    TRANSITION_NAMES = ['MgII_2796', 'MgII_2803', 'CIV_1548', 'CIV_1550',
-                         'SiIV_1393', 'SiIV_1402', 'CIII]_1909',
-                         'NeVIII_770', 'NeVIII_780', 'ArI_1048', 'ArI_1066']
+    TRANSITION_NAMES = [
+        # -- prospect absorption_lines.txt, verbatim (< Mg II 2796.35A) --
+        # C IV is split into its true 1548.204/1550.781 doublet (NIST ASD)
+        # rather than prospect's single blended "C IV 1549.48" marker, for
+        # consistency with how every other doublet in this module is
+        # treated (Mg II, Si IV, N V, O VI all use real doublet pairs).
+        'SiII_1260', 'OI_1302', 'SiII_1304', 'CII_1334', 'SiIV_1393', 'SiIV_1402',
+        'SV_1501', 'SiII_1526', 'CIV_1548', 'CIV_1550', 'FeII_1608', 'AlII_1670',
+        'SiII_1808', 'AlIII_1854', 'AlIII_1862', 'MgI_2026', 'FeII_2344', 'FeII_2374',
+        'FeII_2382', 'FeII_2389', 'MgII_2796', 'MgII_2803',
+        # -- prospect emission_lines.txt, resonance/permitted subset only --
+        'Lyb_1025', 'Lya_1215', 'NV_1238', 'NV_1242', 'CIII]_1908',
+        # -- PI-directed addition beyond the viewer's list --
+        'OVI_1031', 'OVI_1037',
+    ]
 
     # Vacuum wavelengths [Angstrom]. See module docstring's "Per-system
-    # line list" for sourcing and the explicit caveats on the Ne/Ar picks.
+    # line list" for exact sourcing (desihub/prospect's
+    # absorption_lines.txt/emission_lines.txt, provided verbatim by the
+    # PI 2026-08-07, plus the O VI addition and N V doublet split).
     LINE_WAVE_VACUUM = {
-        'MgII_2796':  2796.352,
-        'MgII_2803':  2803.530,
+        'SiII_1260':  1260.4221,
+        'OI_1302':    1302.1685,
+        'SiII_1304':  1304.3702,
+        'CII_1334':   1334.5323,
+        'SiIV_1393':  1393.75,
+        'SiIV_1402':  1402.77,
+        'SV_1501':    1501.76,
+        'SiII_1526':  1526.7070,
         'CIV_1548':   1548.204,
         'CIV_1550':   1550.781,
-        'SiIV_1393':  1393.755,
-        'SiIV_1402':  1402.770,
-        'CIII]_1909': 1908.734,
-        'NeVIII_770': 770.409,
-        'NeVIII_780': 780.324,
-        'ArI_1048':   1048.220,
-        'ArI_1066':   1066.660,
+        'FeII_1608':  1608.4509,
+        'AlII_1670':  1670.788,
+        'SiII_1808':  1808.0129,
+        'AlIII_1854': 1854.7183,
+        'AlIII_1862': 1862.7911,
+        'MgI_2026':   2026.4768,
+        'FeII_2344':  2344.2130,
+        'FeII_2374':  2374.4603,
+        'FeII_2382':  2382.7642,
+        'FeII_2389':  2389.2396,
+        'MgII_2796':  2796.3543,
+        'MgII_2803':  2803.5315,
+        'Lyb_1025':   1025.18,
+        'Lya_1215':   1215.67,
+        'NV_1238':    1238.821,
+        'NV_1242':    1242.804,
+        'CIII]_1908': 1908.734,
+        'OVI_1031':   1031.93,
+        'OVI_1037':   1037.62,
     }
 
     # (Y) MAGIC: mean number of associated absorption systems per QSO
@@ -221,40 +276,73 @@ class AssociatedAbsorberSystems(object):
     MB_SCALE_KMS = 50.0
 
     # (Y) MAGIC: independent log-normal priors on peak optical depth tau0
-    # per transition, in log10(tau0) space -- same convention and same
-    # order-of-magnitude reasoning as AbsorptionSpectrum.TAU0_PRIORS.
-    # Doublet ratios (bluer:redder ~ 2:1) follow the same well-known
-    # alkali-like resonance-doublet oscillator-strength ratios already
-    # used for Na I D/Mg II in absorption.py.
+    # per transition, in log10(tau0) space -- same convention as
+    # AbsorptionSpectrum.TAU0_PRIORS. Amplitude TIERS below are informed
+    # by rough, literature-typical relative line strengths/oscillator
+    # strengths (e.g. Fe II 2382 is the strongest of the four Fe II UV
+    # lines here per its NIST f-value; Lyman-alpha is typically strong/
+    # easily saturated even in weak systems; S V and Mg I trace rarer
+    # ionization/neutral states and are set weaker) -- these are
+    # order-of-magnitude placements, NOT a precise atomic-data fit, same
+    # caveat as every other MAGIC prior in this fork. Doublet ratios
+    # (bluer:redder ~2:1, i.e. redder = 0.5x bluer) follow the standard
+    # alkali-like resonance-doublet oscillator-strength ratio already used
+    # for Na I D/Mg II in absorption.py.
     TAU0_PRIORS = {
-        'MgII_2796':  dict(mean=np.log10(0.5), sigma=0.6),
-        'MgII_2803':  dict(mean=np.log10(0.5 * 0.7), sigma=0.6),
-        'CIV_1548':   dict(mean=np.log10(0.6), sigma=0.6),
-        'CIV_1550':   dict(mean=np.log10(0.6 * 0.5), sigma=0.6),
+        # -- absorption_lines.txt transitions --
+        'SiII_1260':  dict(mean=np.log10(0.25), sigma=0.6),
+        'OI_1302':    dict(mean=np.log10(0.15), sigma=0.6),
+        'SiII_1304':  dict(mean=np.log10(0.15), sigma=0.6),
+        'CII_1334':   dict(mean=np.log10(0.2), sigma=0.6),
         'SiIV_1393':  dict(mean=np.log10(0.4), sigma=0.6),
         'SiIV_1402':  dict(mean=np.log10(0.4 * 0.5), sigma=0.6),
-        'CIII]_1909': dict(mean=np.log10(0.2), sigma=0.6),
-        'NeVIII_770': dict(mean=np.log10(0.2), sigma=0.6),
-        'NeVIII_780': dict(mean=np.log10(0.2 * 0.5), sigma=0.6),
-        'ArI_1048':   dict(mean=np.log10(0.1), sigma=0.6),
-        'ArI_1066':   dict(mean=np.log10(0.1 * 0.5), sigma=0.6),
+        'SV_1501':    dict(mean=np.log10(0.1), sigma=0.6),
+        'SiII_1526':  dict(mean=np.log10(0.2), sigma=0.6),
+        'CIV_1548':   dict(mean=np.log10(0.6), sigma=0.6),
+        'CIV_1550':   dict(mean=np.log10(0.6 * 0.5), sigma=0.6),
+        'FeII_1608':  dict(mean=np.log10(0.12), sigma=0.6),
+        'AlII_1670':  dict(mean=np.log10(0.2), sigma=0.6),
+        'SiII_1808':  dict(mean=np.log10(0.15), sigma=0.6),
+        'AlIII_1854': dict(mean=np.log10(0.3), sigma=0.6),
+        'AlIII_1862': dict(mean=np.log10(0.3 * 0.5), sigma=0.6),
+        'MgI_2026':   dict(mean=np.log10(0.1), sigma=0.6),
+        'FeII_2344':  dict(mean=np.log10(0.2), sigma=0.6),
+        'FeII_2374':  dict(mean=np.log10(0.08), sigma=0.6),
+        'FeII_2382':  dict(mean=np.log10(0.35), sigma=0.6),
+        'FeII_2389':  dict(mean=np.log10(0.08), sigma=0.6),
+        'MgII_2796':  dict(mean=np.log10(0.5), sigma=0.6),
+        'MgII_2803':  dict(mean=np.log10(0.5 * 0.7), sigma=0.6),
+        # -- emission_lines.txt resonance subset --
+        'Lyb_1025':   dict(mean=np.log10(0.3), sigma=0.6),
+        'Lya_1215':   dict(mean=np.log10(0.7), sigma=0.6),
+        'NV_1238':    dict(mean=np.log10(0.4), sigma=0.6),
+        'NV_1242':    dict(mean=np.log10(0.4 * 0.5), sigma=0.6),
+        'CIII]_1908': dict(mean=np.log10(0.2), sigma=0.6),
+        # -- PI-directed addition beyond the viewer's list --
+        'OVI_1031':   dict(mean=np.log10(0.3), sigma=0.6),
+        'OVI_1037':   dict(mean=np.log10(0.3 * 0.5), sigma=0.6),
     }
 
-    def __init__(self, minwave=700.0, maxwave=3000.0, cdelt_kms=20.0,
+    def __init__(self, minwave=950.0, maxwave=3000.0, cdelt_kms=20.0,
                  log10wave=None, include_transitions=None):
         """
         Args:
             minwave, maxwave (float): rest-frame output grid bounds [A],
-                wide enough by default to cover Ne VIII through Mg II.
-                Only used if log10wave is not provided.
+                wide enough by default to cover Ly-beta (1025.18A, the
+                shortest default transition) through Mg II, with margin
+                for the largest allowed blueward velocity offset
+                (V_MAX_KMS). Only used if log10wave is not provided.
             cdelt_kms (float): output-grid pixel size [km/s] (log-uniform
                 grid, same convention as AbsorptionSpectrum/EMSpectrum).
                 Only used if log10wave is not provided.
             log10wave (ndarray, optional): explicit output log10(wave)
                 grid, to match an external continuum grid exactly.
             include_transitions (list of str, optional): subset of
-                TRANSITION_NAMES active in every system (default: all 11).
-                Every active system uses the same transition set.
+                TRANSITION_NAMES active in every system (default: all 29,
+                matching the desihub/prospect viewer's own line list
+                blueward of Mg II plus the O VI addition -- see module
+                docstring). Every active system uses the same transition
+                set.
         """
         if log10wave is None:
             cdelt_loglam = cdelt_kms / C_LIGHT / np.log(10)

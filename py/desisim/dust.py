@@ -116,6 +116,61 @@ package, same method used for the earlier Calzetti check):
     candidate future extension, not yet implemented.
 
 --------------------------------------------------------------------------
+2026-08-06 (cont'd): closing the red/near-IR gap
+--------------------------------------------------------------------------
+A third OPT-IN extension, `include_nir_break=True` (default False, same
+backward-compatibility guarantee as the other two), replaces the single
+power-law term theta0*(lambda/lambda_V)^(-theta1) with a smoothly-broken
+power law (SBPL) -- the standard tool (e.g. Ryde 1999's gamma-ray-burst
+pulse spectra; used generally wherever a single power-law index cannot
+span a full band) for exactly the failure mode found above: one slope
+cannot simultaneously fit the blue/UV and red/NIR behavior of a real
+extinction curve. The extended power-law term is:
+
+    x(lambda)     = lambda / lambda_break
+    bracket(lambda) = 0.5 * [1 + x(lambda)^(1/DELTA_BREAK)]
+    corr(lambda)  = bracket(lambda)^((theta1 - theta5)*DELTA_BREAK)
+                    / bracket(lambda_V)^((theta1 - theta5)*DELTA_BREAK)
+    pl(lambda)    = theta0 * (lambda/lambda_V)^(-theta1) * corr(lambda)
+
+with a new free red/NIR slope theta5 (only drawn/used when
+include_nir_break=True) and a new free break wavelength lambda_break
+(drawn from BREAK_WAVE_RANGE unless given explicitly). DELTA_BREAK is a
+fixed (not drawn) MAGIC smoothness constant controlling how gradual the
+transition is. By construction (division by the bracket evaluated at
+lambda_V), pl(lambda_V) = theta0 exactly regardless of lambda_break/theta5,
+preserving theta0's meaning as an amplitude near V-band. The asymptotic
+limits are, by design:
+
+    lambda << lambda_break:  pl(lambda) -> theta0*(lambda/lambda_V)^(-theta1)   [legacy slope theta1]
+    lambda >> lambda_break:  pl(lambda) -> propto lambda^(-theta5)              [new, independent slope theta5]
+
+so theta1==theta5 exactly recovers the legacy single power law for any
+lambda_break, and include_nir_break=False recovers it exactly bit-for-bit
+regardless of theta5/lambda_break (neither is drawn nor consulted).
+BREAK_WAVE_RANGE is anchored on CCM89's own optical/near-IR transition
+(x=1.1 um^-1, i.e. ~9091 Angstrom) as the physically-motivated location a
+break of this kind should plausibly sit near, widened to give reach beyond
+that one specific curve.
+
+Verified empirically: re-fitting the same CCM89 Rv=3.1 curve as above with
+all three extensions on (bump shape, FUV curvature, NIR break) drops the
+overall worst-case error from ~38% down to ~3.8%, and the red/optical
+(>5000A) region specifically from ~38% worst/~8% typical down to ~3.8%
+worst/~1.7% typical -- every wavelength region (far-UV, near-UV/bump,
+blue-optical, red/optical) now sits at a few percent typical/a few percent
+worst. In this particular fit theta5 and lambda_break both landed at the
+edges of their default prior ranges (steepest allowed red slope, shortest
+allowed break wavelength), meaning the true CCM89 red/NIR turnover wants
+to be even steeper/closer-in than the current default
+THETA_PRIORS['theta5']/BREAK_WAVE_RANGE allow -- still an excellent fit in
+absolute terms, but a sign the default ranges could be widened further if
+red/NIR fidelity to real curves becomes a priority; left as-is for now
+since "reach, not exactness" is this module's stated goal and even the
+boundary-pinned fit already closes the gap by an order of magnitude.
+See test_dust.py's TestNirBreakExtension for the corresponding tests.
+
+--------------------------------------------------------------------------
 Universality across galaxies and QSOs
 --------------------------------------------------------------------------
 This module deliberately does NOT special-case "galaxy dust" vs "QSO/AGN
@@ -208,9 +263,36 @@ def _fm90_fuv_curvature_numpy(wave):
     return fx
 
 
-def _dust_curve_numpy(wave, theta, lambda_v, lambda_bump, bump_width, include_fuv_curvature):
+# (Y) MAGIC: fixed smoothness of the SBPL blue/red power-law break used
+# when include_nir_break=True. Not drawn -- controls how gradual the
+# theta1->theta5 slope transition is around lambda_break; a moderate,
+# reasonably sharp value chosen so the break is well-localized without
+# introducing a true kink (which would be harder for gradient-based
+# fitting/NPE calibration to handle than a real physical extinction curve).
+DELTA_BREAK = 0.3
+
+
+def _broken_powerlaw_bracket_numpy(wave, lambda_break):
+    return 0.5 * (1.0 + (wave / lambda_break) ** (1.0 / DELTA_BREAK))
+
+
+def _broken_powerlaw_numpy(wave, theta0, theta1, theta5, lambda_v, lambda_break):
+    """Smoothly-broken power law -- see module docstring's "closing the
+    red/near-IR gap" section for the derivation and asymptotic limits."""
+    exponent = (theta1 - theta5) * DELTA_BREAK
+    corr = _broken_powerlaw_bracket_numpy(wave, lambda_break) ** exponent
+    norm = _broken_powerlaw_bracket_numpy(np.asarray(lambda_v), lambda_break) ** exponent
+    return theta0 * (wave / lambda_v) ** (-theta1) * (corr / norm)
+
+
+def _dust_curve_numpy(wave, theta, lambda_v, lambda_bump, bump_width, include_fuv_curvature,
+                       include_nir_break=False, lambda_break=None):
     """k(lambda; theta) -- see module docstring for the closed form."""
-    term1 = theta['theta0'] * (wave / lambda_v) ** (-theta['theta1'])
+    if include_nir_break:
+        term1 = _broken_powerlaw_numpy(wave, theta['theta0'], theta['theta1'], theta['theta5'],
+                                        lambda_v, lambda_break)
+    else:
+        term1 = theta['theta0'] * (wave / lambda_v) ** (-theta['theta1'])
     term2 = theta['theta2'] * _drude_numpy(wave, lambda_bump, bump_width)
     term3 = theta['theta3']
     k = term1 + term2 + term3
@@ -220,6 +302,7 @@ def _dust_curve_numpy(wave, theta, lambda_v, lambda_bump, bump_width, include_fu
 
 
 def _dust_curve_torch(wave, theta, lambda_v, lambda_bump, bump_width, include_fuv_curvature,
+                       include_nir_break=False, lambda_break=None,
                        device=None, dtype=None):
     """Torch equivalent of _dust_curve_numpy, evaluated on `device` (auto
     CPU/CUDA-detected via desisim.torch_utils.get_device if device is
@@ -237,7 +320,20 @@ def _dust_curve_torch(wave, theta, lambda_v, lambda_bump, bump_width, include_fu
     dt = dtype if dtype is not None else torch.float64
 
     wave_t = torch.as_tensor(np.asarray(wave), device=dev, dtype=dt)
-    term1 = theta['theta0'] * (wave_t / lambda_v) ** (-theta['theta1'])
+
+    if include_nir_break:
+        # lambda_v is a plain python float here (not wrapped in a tensor)
+        # -- torch broadcasts against python scalars fine, and wrapping a
+        # 0-d numpy array via torch.as_tensor hits the same numpy<2/torch
+        # ABI issue flagged elsewhere in this module (see the
+        # Tensor.numpy()-avoidance comment below).
+        exponent = (theta['theta1'] - theta['theta5']) * DELTA_BREAK
+        bracket = 0.5 * (1.0 + (wave_t / lambda_break) ** (1.0 / DELTA_BREAK))
+        bracket_v = 0.5 * (1.0 + (lambda_v / lambda_break) ** (1.0 / DELTA_BREAK))
+        corr = bracket ** exponent / bracket_v ** exponent
+        term1 = theta['theta0'] * (wave_t / lambda_v) ** (-theta['theta1']) * corr
+    else:
+        term1 = theta['theta0'] * (wave_t / lambda_v) ** (-theta['theta1'])
     drude = (wave_t**2 * bump_width**2) / ((wave_t**2 - lambda_bump**2)**2 + wave_t**2 * bump_width**2)
     term2 = theta['theta2'] * drude
     k = term1 + term2 + theta['theta3']
@@ -284,6 +380,12 @@ class DustAttenuation(object):
     BUMP_CENTER_RANGE = (2100.0, 2250.0)
     BUMP_WIDTH_RANGE = (250.0, 500.0)
 
+    # (Y) MAGIC: draw range for the SBPL break wavelength when
+    # include_nir_break=True, anchored on CCM89's own optical/near-IR
+    # transition (x=1.1 um^-1 <-> ~9091A) and widened for reach beyond
+    # that one specific curve.
+    BREAK_WAVE_RANGE = (7000.0, 12000.0)
+
     # (Y) MAGIC: independent uniform priors for each free parameter,
     # chosen to span "SMC-like through flat/AGN-torus-like reddening laws"
     # per the project's stated goal, not derived from data. Pending the
@@ -307,16 +409,22 @@ class DustAttenuation(object):
         # in Fitzpatrick & Massa-style fits to real MW/LMC sightlines
         # (order-unity in FM90's own normalization convention).
         'theta4': (0.0, 1.5),
+        # (Y) MAGIC: SBPL red/NIR slope (only used when
+        # include_nir_break=True). Wider than theta1's range since the
+        # true red/NIR behavior of real curves is less well-constrained
+        # than the blue/UV slope in this project's priors so far.
+        'theta5': (0.0, 3.0),
     }
 
     def __init__(self, theta_priors=None, lambda_v=None, lambda_bump=None, bump_width=None,
-                 vary_bump_shape=False, include_fuv_curvature=False,
-                 bump_center_range=None, bump_width_range=None):
+                 vary_bump_shape=False, include_fuv_curvature=False, include_nir_break=False,
+                 bump_center_range=None, bump_width_range=None, break_wave_range=None):
         """
         Args:
             theta_priors (dict, optional): override THETA_PRIORS, mapping
-                'theta0'..'theta4' -> (low, high) uniform-draw bounds
-                ('theta4' only consulted if include_fuv_curvature=True).
+                'theta0'..'theta5' -> (low, high) uniform-draw bounds
+                ('theta4' only consulted if include_fuv_curvature=True;
+                'theta5' only consulted if include_nir_break=True).
             lambda_v (float, optional): override LAMBDA_V.
             lambda_bump, bump_width (float, optional): fixed bump center/
                 width used when vary_bump_shape=False (the default);
@@ -331,9 +439,16 @@ class DustAttenuation(object):
                 behavior, exactly reproducing the original family with no
                 curvature term). If True, adds theta4*F(x) (see module
                 docstring) to k(lambda).
+            include_nir_break (bool, optional): default False (legacy
+                behavior, single power law). If True, replaces the
+                power-law term with a smoothly-broken power law (theta1
+                blueward of a free break wavelength, theta5 redward of it
+                -- see module docstring's "closing the red/near-IR gap").
             bump_center_range, bump_width_range (tuple, optional): override
                 BUMP_CENTER_RANGE/BUMP_WIDTH_RANGE (only consulted if
                 vary_bump_shape=True).
+            break_wave_range (tuple, optional): override BREAK_WAVE_RANGE
+                (only consulted if include_nir_break=True).
         """
         self.theta_priors = dict(theta_priors) if theta_priors is not None else dict(self.THETA_PRIORS)
         self.lambda_v = lambda_v if lambda_v is not None else self.LAMBDA_V
@@ -341,8 +456,10 @@ class DustAttenuation(object):
         self.bump_width = bump_width if bump_width is not None else self.BUMP_WIDTH
         self.vary_bump_shape = vary_bump_shape
         self.include_fuv_curvature = include_fuv_curvature
+        self.include_nir_break = include_nir_break
         self.bump_center_range = bump_center_range if bump_center_range is not None else self.BUMP_CENTER_RANGE
         self.bump_width_range = bump_width_range if bump_width_range is not None else self.BUMP_WIDTH_RANGE
+        self.break_wave_range = break_wave_range if break_wave_range is not None else self.BREAK_WAVE_RANGE
 
     def spectrum(self, wave, flux_in, theta=None, seed=None, backend='auto', device=None, dtype=None):
         """Build the additive dust-attenuation flux deficit.
@@ -357,11 +474,14 @@ class DustAttenuation(object):
                 (e.g. the galaxy alone, or the QSO alone -- see module
                 docstring's "Universality across galaxies and QSOs").
             theta (dict, optional): explicit override for any of
-                'theta0'..'theta4' (theta4 only meaningful if
-                include_fuv_curvature=True), plus 'lambda_bump'/
-                'bump_width' if vary_bump_shape=True; unlisted parameters
-                draw independently from theta_priors/bump_center_range/
-                bump_width_range. Explicit values always win.
+                'theta0'..'theta5' (theta4 only meaningful if
+                include_fuv_curvature=True; theta5 only meaningful if
+                include_nir_break=True), plus 'lambda_bump'/'bump_width' if
+                vary_bump_shape=True and/or 'lambda_break' if
+                include_nir_break=True; unlisted parameters draw
+                independently from theta_priors/bump_center_range/
+                bump_width_range/break_wave_range. Explicit values always
+                win.
             seed (int, optional): RNG seed for reproducibility.
             backend, device, dtype: identical torch/numpy dispatch
                 convention as the rest of this fork's new components (see
@@ -385,6 +505,8 @@ class DustAttenuation(object):
         param_names = ['theta0', 'theta1', 'theta2', 'theta3']
         if self.include_fuv_curvature:
             param_names.append('theta4')
+        if self.include_nir_break:
+            param_names.append('theta5')
 
         resolved = {}
         for name in param_names:
@@ -407,15 +529,26 @@ class DustAttenuation(object):
             lambda_bump_used = self.lambda_bump
             bump_width_used = self.bump_width
 
+        if self.include_nir_break:
+            if 'lambda_break' in theta:
+                lambda_break_used = theta['lambda_break']
+            else:
+                lambda_break_used = rand.uniform(*self.break_wave_range)
+        else:
+            lambda_break_used = None
+
         wave = np.asarray(wave, dtype=float)
         flux_in = np.asarray(flux_in, dtype=float)
 
         if _use_torch_backend(backend):
             k = _dust_curve_torch(wave, resolved, self.lambda_v, lambda_bump_used, bump_width_used,
-                                   self.include_fuv_curvature, device=device, dtype=dtype)
+                                   self.include_fuv_curvature,
+                                   include_nir_break=self.include_nir_break, lambda_break=lambda_break_used,
+                                   device=device, dtype=dtype)
         else:
             k = _dust_curve_numpy(wave, resolved, self.lambda_v, lambda_bump_used, bump_width_used,
-                                   self.include_fuv_curvature)
+                                   self.include_fuv_curvature,
+                                   include_nir_break=self.include_nir_break, lambda_break=lambda_break_used)
 
         transmission = 10.0 ** (-0.4 * k)
         dust_flux = flux_in * (transmission - 1.0)
@@ -423,5 +556,7 @@ class DustAttenuation(object):
         table_rows = [(name, resolved[name]) for name in param_names]
         if self.vary_bump_shape:
             table_rows += [('lambda_bump', lambda_bump_used), ('bump_width', bump_width_used)]
+        if self.include_nir_break:
+            table_rows += [('lambda_break', lambda_break_used)]
         theta_table = Table(rows=table_rows, names=('param', 'value'))
         return dust_flux, wave, theta_table

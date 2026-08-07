@@ -158,6 +158,55 @@ class TestAssociatedAbsorberSystems(unittest.TestCase):
         self.assertGreater(AssociatedAbsorberSystems.V_MAX_KMS, 0.0)
         self.assertGreater(AssociatedAbsorberSystems.MB_SCALE_KMS, 0.0)
 
+    def test_transition_count_matches_prospect_viewer_plus_ovi(self):
+        '''Regression test tying the default line list to the PI-provided
+        desihub/prospect absorption_lines.txt/emission_lines.txt excerpt
+        (2026-08-07): 21 absorption-file entries (with C IV split into its
+        true doublet, +1 net) + 5 resonance emission-file entries (Ly-beta,
+        Ly-alpha, N V split into its true doublet, C III]) + 2 O VI
+        (the PI-directed "plus any others its missing" addition) = 29.'''
+        self.assertEqual(len(AssociatedAbsorberSystems.TRANSITION_NAMES), 29)
+
+    def test_key_wavelengths_match_prospect_source_exactly(self):
+        '''Spot-check a handful of wavelengths directly against the
+        PI-provided prospect file excerpt (vacuum values, verbatim).'''
+        wave = AssociatedAbsorberSystems.LINE_WAVE_VACUUM
+        expected = {
+            'SiII_1260': 1260.4221, 'FeII_2382': 2382.7642,
+            'MgII_2796': 2796.3543, 'MgII_2803': 2803.5315,
+            'Lya_1215': 1215.67, 'CIII]_1908': 1908.734,
+            'SiIV_1393': 1393.75, 'AlIII_1854': 1854.7183,
+        }
+        for name, val in expected.items():
+            self.assertAlmostEqual(wave[name], val, places=4)
+
+    def test_civ_and_nv_use_true_doublets_not_prospect_blended_markers(self):
+        '''C IV and N V are split into their real NIST-ASD doublet
+        components (1548.204/1550.781 and 1238.821/1242.804) rather than
+        prospect's single blended viewer markers (1549.48 and 1240.81
+        respectively), for consistency with every other doublet here.'''
+        wave = AssociatedAbsorberSystems.LINE_WAVE_VACUUM
+        self.assertIn('CIV_1548', wave)
+        self.assertIn('CIV_1550', wave)
+        self.assertNotIn('CIV_1549', wave)
+        self.assertIn('NV_1238', wave)
+        self.assertIn('NV_1242', wave)
+
+    def test_speculative_neviii_ari_guesses_removed(self):
+        '''The earlier speculative Ne VIII/Ar I placeholder guesses (for
+        the PI's originally underspecified "Ne"/"Ar") must be gone now
+        that the authoritative prospect-based list is in place.'''
+        names = set(AssociatedAbsorberSystems.TRANSITION_NAMES)
+        self.assertFalse(any('NeVIII' in n for n in names))
+        self.assertFalse(any('ArI' in n for n in names))
+
+    def test_all_transitions_blueward_of_or_at_mgii(self):
+        wave = AssociatedAbsorberSystems.LINE_WAVE_VACUUM
+        mgii = wave['MgII_2796']
+        for name, w in wave.items():
+            self.assertLessEqual(w, wave['MgII_2803'] + 1e-6,
+                                  '{} at {} is redward of Mg II'.format(name, w))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -166,7 +166,12 @@ class TestGenerateQsoComponent(unittest.TestCase):
         fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
         em_kwargs = dict(seed=99, hbetaflux=1e-16, **fixed_ratios)
 
-        out = generate_qso_component(self.wave, em=em, em_kwargs=dict(em_kwargs), seed=5)
+        # Zero out Fe II's contribution to 'emission' for this test -- it's
+        # checking EM's own narrow/broad subtraction in isolation, not the
+        # Fe II pseudo-continuum (which legitimately also lands in the
+        # 'emission' bucket -- see decompose.py's module docstring).
+        out = generate_qso_component(self.wave, em=em, em_kwargs=dict(em_kwargs),
+                                      feii_kwargs=dict(uv_norm=0.0, optical_norm=0.0), seed=5)
 
         emflux_total, emwave, _ = em.spectrum(**em_kwargs)
         narrow_only = dict(em_kwargs)
@@ -187,6 +192,25 @@ class TestGenerateQsoComponent(unittest.TestCase):
         associated = AssociatedAbsorberSystems(log10wave=np.log10(self.wave),
                                                 include_transitions=['MgII_2796', 'MgII_2803'])
         out = generate_qso_component(self.wave, associated=associated, seed=9)
+        self.assertTrue(np.all(np.isfinite(out['total'])))
+
+    def test_feii_is_wired_into_emission_bucket(self):
+        '''Task #31 wiring check: the Fe II pseudo-continuum must actually
+        land in the returned 'emission' array and provenance dict --
+        zeroing it out via feii_kwargs must measurably change 'emission'
+        and 'total' relative to a real draw.'''
+        out_on = generate_qso_component(self.wave, seed=20)
+        out_off = generate_qso_component(self.wave, seed=20,
+                                          feii_kwargs=dict(uv_norm=0.0, optical_norm=0.0))
+        self.assertIn('feii_params', out_on['draws'])
+        self.assertTrue(out_on['components']['feii_flux'])
+        self.assertFalse(np.allclose(out_on['emission'], out_off['emission']))
+
+    def test_pre_built_feii_instance_is_honored(self):
+        from desisim.feii_continuum import FeIIPseudoContinuum
+        feii = FeIIPseudoContinuum(log10wave=np.log10(self.wave))
+        out = generate_qso_component(self.wave, feii=feii,
+                                      feii_kwargs=dict(uv_norm=1.0, optical_norm=1.0), seed=21)
         self.assertTrue(np.all(np.isfinite(out['total'])))
 
 

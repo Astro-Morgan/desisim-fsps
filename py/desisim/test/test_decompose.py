@@ -46,6 +46,17 @@ class TestCombineIntoChannels(unittest.TestCase):
         self.assertTrue(out['components']['broad_emission'])
         self.assertTrue(out['components']['dust_scatter_excess'])
 
+    def test_emission_bucket_sums_feii_flux(self):
+        '''Task #31: the Fe II UV+optical pseudo-continuum lands in the
+        "emission" bucket (it's emitted photons, not LOS light removal,
+        despite the "continuum" in its name -- see module docstring).'''
+        cont = self._const(1.0)
+        narrow = self._const(0.1)
+        feii = self._const(0.3)
+        out = combine_into_channels(self.wave, cont, narrow_emission=narrow, feii_flux=feii)
+        np.testing.assert_array_equal(out['emission'], narrow + feii)
+        self.assertTrue(out['components']['feii_flux'])
+
     def test_absorption_bucket_sums_ism_associated_dust_and_bal(self):
         '''The PI's clarified grouping: ISM/CGM absorption, the stochastic
         multi-system associated-absorption channel, BAL, and dust
@@ -82,8 +93,8 @@ class TestCombineIntoChannels(unittest.TestCase):
         cont = self._const(1.0)
         out = combine_into_channels(self.wave, cont)
         for key in ('continuum_agn', 'narrow_emission', 'broad_emission',
-                    'dust_scatter_excess', 'ism_absorption', 'associated_absorption_flux',
-                    'dust_flux', 'bal_flux'):
+                    'dust_scatter_excess', 'feii_flux', 'ism_absorption',
+                    'associated_absorption_flux', 'dust_flux', 'bal_flux'):
             self.assertFalse(out['components'][key])
 
     def test_mismatched_length_array_raises(self):

@@ -106,6 +106,7 @@ from desisim.absorption import AbsorptionSpectrum
 from desisim.associated_absorption import AssociatedAbsorberSystems
 from desisim.dust import DustAttenuation
 from desisim.agn_continuum import AGNPowerLawContinuum
+from desisim.feii_continuum import FeIIPseudoContinuum
 from desisim.decompose import combine_into_channels
 from desisim.qso_galaxy_blend import blend_qso_galaxy
 
@@ -221,10 +222,12 @@ def generate_galaxy_component(wave, continuum=None, fsps_kwargs=None,
 def generate_qso_component(wave, agn=None, agn_kwargs=None,
                             em=None, em_kwargs=None,
                             associated=None, associated_kwargs=None,
-                            dust=None, dust_kwargs=None, seed=None):
+                            dust=None, dust_kwargs=None,
+                            feii=None, feii_kwargs=None, seed=None):
     """Assemble one QSO-side additive spectrum: simqso broken power-law
     continuum + QSO-type dust attenuation + broad (AGN-like) emission +
-    blueshifted associated-absorber systems.
+    blueshifted associated-absorber systems + Fe II UV/optical pseudo-
+    continuum.
 
     Narrow-line simplification (see qso_galaxy_blend.py's module
     docstring): this function discards em's own narrow-line component
@@ -259,6 +262,12 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
             carry QSO-type (e.g. SMC-like) priors if a non-default one is
             wanted. Default None builds DustAttenuation().
         dust_kwargs (dict, optional): forwarded to dust.spectrum().
+        feii (FeIIPseudoContinuum, optional): pre-built instance. Default
+            None builds FeIIPseudoContinuum(log10wave=np.log10(wave)).
+        feii_kwargs (dict, optional): forwarded to feii.spectrum() (e.g.
+            uv_params/optical_params/uv_norm/optical_norm -- see
+            feii_continuum.py for the independent-UV/optical-draw
+            rationale).
         seed (int, optional): top-level seed; derives independent child
             seeds for each submodule unless overridden inside the
             respective *_kwargs dict.
@@ -273,8 +282,9 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     em_kwargs = dict(em_kwargs) if em_kwargs else {}
     associated_kwargs = dict(associated_kwargs) if associated_kwargs else {}
     dust_kwargs = dict(dust_kwargs) if dust_kwargs else {}
+    feii_kwargs = dict(feii_kwargs) if feii_kwargs else {}
 
-    seed_agn, seed_em, seed_associated, seed_dust = _child_seeds(seed, 4)
+    seed_agn, seed_em, seed_associated, seed_dust, seed_feii = _child_seeds(seed, 5)
 
     if agn is None:
         agn = AGNPowerLawContinuum()
@@ -305,13 +315,21 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     dustflux, dustwave, dusttable = dust.spectrum(wave, continuum_agn, **dust_kwargs)
     dust_flux = _harmonize(wave, dustwave, dustflux)
 
+    if feii is None:
+        feii = FeIIPseudoContinuum(log10wave=np.log10(wave))
+    feii_kwargs.setdefault('seed', seed_feii)
+    feiiflux, feiiwave, feiiparams = feii.spectrum(**feii_kwargs)
+    feii_flux = _harmonize(wave, feiiwave, feiiflux)
+
     out = combine_into_channels(wave, continuum_stellar=np.zeros_like(wave),
                                  continuum_agn=continuum_agn,
                                  broad_emission=broad_emission,
                                  associated_absorption_flux=associated_absorption_flux,
-                                 dust_flux=dust_flux)
+                                 dust_flux=dust_flux,
+                                 feii_flux=feii_flux)
     out['draws'] = dict(agn_slopes=slopetable, em_line_total=emline_total,
-                         associated_line=assocline, dust_theta=dusttable)
+                         associated_line=assocline, dust_theta=dusttable,
+                         feii_params=feiiparams)
     return out
 
 

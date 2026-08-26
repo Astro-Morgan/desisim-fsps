@@ -217,19 +217,21 @@ class TestEMSpectrumBackends(unittest.TestCase):
 
 
 class TestNewLinesNarrowBroad(unittest.TestCase):
-    '''Unit/regression tests for handoff Sec 1.3: the seven new lines
+    '''Unit/regression tests for handoff Sec 1.3's seven original new lines
     ([NeIII] 3869,3968; [OIII] 4363; HeII 4686; [NII] 5755; [SII] 4068,4076)
-    and their independent narrow (nebular) + broad (AGN-like) tunable
-    components. include_new_lines defaults to False, so every pre-existing
-    caller (including every other test in this file) is unaffected -- that
-    invariant is exercised directly below.
+    plus task #33's four additions (SiIV+OIV] 1400, CIV 1549, CIII] 1909,
+    MgII 2798) and their independent narrow (nebular) + broad (AGN-like)
+    tunable components. include_new_lines defaults to False, so every
+    pre-existing caller (including every other test in this file) is
+    unaffected -- that invariant is exercised directly below.
     '''
 
     def setUp(self):
-        # Wide window so every new line (2796-9532A range across narrow +
-        # broad + all pre-existing lines) falls inside [minwave, maxwave].
-        self.em_new = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_new_lines=True)
-        self.em_legacy = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_new_lines=False)
+        # Wide window so every new line (1396.76-9532A range across narrow
+        # + broad + all pre-existing lines, after task #33 pushed the blue
+        # edge down to SiIV+OIV] 1396.76) falls inside [minwave, maxwave].
+        self.em_new = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True)
+        self.em_legacy = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=False)
         self.fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
 
     def _rows(self, line_table, name):
@@ -413,6 +415,57 @@ class TestNewLinesNarrowBroad(unittest.TestCase):
         emspec_np, _, _ = self.em_new.spectrum(backend='numpy', **kwargs)
         emspec_torch, _, _ = self.em_new.spectrum(backend='torch', device='cpu', **kwargs)
         np.testing.assert_allclose(emspec_np, emspec_torch, rtol=1e-6, atol=1e-30)
+
+    def test_task33_lines_present_when_enabled(self):
+        '''The four task #33 additions must all be reachable in [minwave,
+        maxwave] and produce both a narrow and a broad row.'''
+        _, _, line = self.em_new.spectrum(seed=1, hbetaflux=1e-16, **self.fixed_ratios)
+        names = set(line['name'])
+        for name in ('SiIV_1400', 'CIV_1549', 'CIII]_1909', 'MgII_2798'):
+            self.assertIn(name, names)
+            self.assertIn(name + '_broad', names)
+
+    def test_task33_broad_ratios_match_vanden_berk_2001(self):
+        '''broad_mean for the task #33 lines is log10(Rel.Flux/Rel.Flux_Hbeta)
+        from Vanden Berk et al. (2001) Table 2 -- not drawn from a prior
+        (default broadsigma path would scatter it), so an explicit-ratio
+        call must reproduce those exact literature-anchored numbers via
+        the same hbeta_flux_effective*ratio formula used for every other
+        broad line.'''
+        hbeta = 8.649
+        expected_ratio = {
+            'SiIV_1400': 8.916 / hbeta,
+            'CIV_1549': 25.291 / hbeta,
+            'CIII]_1909': 15.943 / hbeta,
+            'MgII_2798': 14.725 / hbeta,
+        }
+        explicit_broad = {n: expected_ratio[n] for n in expected_ratio}
+        hbetaflux = 1e-16
+        _, _, line = self.em_new.spectrum(seed=1, hbetaflux=hbetaflux,
+                                           new_line_broad_ratios=explicit_broad, **self.fixed_ratios)
+        for name, ratio in expected_ratio.items():
+            row = self._rows(line, name + '_broad')
+            self.assertAlmostEqual(float(row['ratio'][0]), ratio, places=6)
+            np.testing.assert_allclose(float(row['flux'][0]), hbetaflux * ratio, rtol=1e-6)
+
+    def test_mgii_2798_broad_row_independent_of_existing_narrow_doublet(self):
+        '''MgII_2798 (task #33, broad-only) must coexist with the separate,
+        pre-existing MgII_2800a/2800b narrow doublet (include_mgii) without
+        interfering with it -- they are independent rows/mechanisms.'''
+        em = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True, include_mgii=True)
+        # mgiihbeta is used directly as the linear MgII2796/Hbeta ratio
+        # (not a log10 value) -- see templates.py's
+        # `line['ratio'][is2800a] = mgiihbeta` assignment.
+        _, _, line = em.spectrum(seed=1, hbetaflux=1e-16, mgiihbeta=0.1, **self.fixed_ratios)
+        names = set(line['name'])
+        self.assertIn('MgII_2800a', names)
+        self.assertIn('MgII_2800b', names)
+        self.assertIn('MgII_2798', names)
+        self.assertIn('MgII_2798_broad', names)
+        # the dedicated narrow doublet's ratio must be untouched by the
+        # new row's own (deliberately negligible) narrow draw.
+        row_2800a = self._rows(line, 'MgII_2800a')
+        self.assertAlmostEqual(float(row_2800a['ratio'][0]), 0.1, places=8)
 
 
 class TestBroadVelshift(unittest.TestCase):

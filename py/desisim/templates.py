@@ -174,8 +174,8 @@ class EMSpectrum(object):
         log10wave (numpy.ndarray, optional): Input/output wavelength array
             (log10-Angstrom, default None).
         include_mgii (bool, optional): Include Mg II in emission (default False).
-        include_new_lines (bool, optional): Include the seven Sec 1.3
-            narrow+broad AGN-like lines (default False).
+        include_new_lines (bool, optional): Include the Sec 1.3 / task #33
+            narrow+broad AGN-like lines (NEW_LINE_NAMES; default False).
         include_broad_velshift (bool, optional): default False (legacy
             behavior -- broadshift_kms forced to 0.0 unless explicitly
             given in spectrum()). If True, spectrum() draws broadshift_kms
@@ -223,10 +223,12 @@ class EMSpectrum(object):
         'mgiihbeta':  dict(mean=np.log10(0.3),  sigma=0.30),  # ⚠ MAGIC sigma
     }
 
-    # Handoff Sec 1.3: seven newly-added lines, each with an independent
-    # narrow (nebular) AND broad (AGN-like) tunable component, per explicit
-    # project requirement ("every newly added line needs both... not a
-    # single fixed-width line"). NEW_LINE_NAMES must match the 'name'
+    # Handoff Sec 1.3 (seven lines) + task #33 (four more: SiIV_1400,
+    # CIV_1549, CIII]_1909, MgII_2798): each newly-added line gets an
+    # independent narrow (nebular) AND broad (AGN-like) tunable component,
+    # per explicit project requirement ("every newly added line needs
+    # both... not a single fixed-width line"). NEW_LINE_NAMES must match
+    # the 'name'
     # column values in forbidden_lines.ecsv/recombination_lines.ecsv
     # exactly (see those files' 2026-08-06 additions).
     #
@@ -253,7 +255,28 @@ class EMSpectrum(object):
     #    every new line, not because real spectra typically show strong
     #    broad components on auroral lines.
     NEW_LINE_NAMES = ['[NeIII]_3869', '[NeIII]_3968', '[OIII]_4363',
-                       'HeII_4686', '[NII]_5755', '[SII]_4068', '[SII]_4076']
+                       'HeII_4686', '[NII]_5755', '[SII]_4068', '[SII]_4076',
+                       'SiIV_1400', 'CIV_1549', 'CIII]_1909', 'MgII_2798']
+    # Task #33: broad_mean for the last four lines is NOT a MAGIC guess --
+    # it is log10(Rel.Flux_line / Rel.Flux_Hbeta) read directly from Vanden
+    # Berk et al. (2001, AJ 122, 549) Table 2's composite-quasar emission-
+    # line list (their "Rel. Flux = 100*F/F(Lyalpha)" column, so the
+    # Lyalpha normalization cancels in this ratio): SiIV+OIV] 1396.76 =
+    # 8.916, CIV 1549.06 = 25.291, CIII] 1908.73 = 15.943, MgII 2798.75 =
+    # 14.725, Hbeta 4862.68 = 8.649 (all in that same table). broad_sigma
+    # for those four is smaller (0.30 dex) than the ⚠ MAGIC entries below
+    # since it reflects genuine object-to-object scatter around a measured
+    # median, not a placeholder. narrow_mean for those same four IS ⚠
+    # MAGIC (no analogous measurement used here): CIV/CIII]/SiIV are high-
+    # ionization resonance/semi-forbidden lines with only a weak, poorly-
+    # constrained narrow-line-region contribution in most Type 1 QSOs, set
+    # here to ~3% of the (measured) broad amplitude as a placeholder,
+    # deferred to NPE calibration like every other ⚠ MAGIC entry.
+    # MgII_2798's narrow_mean is deliberately pinned far smaller still
+    # (~1e-4 of Hbeta) -- this row exists ONLY to carry a broad component;
+    # narrow MgII is already fully handled by the separate, pre-existing
+    # MgII_2800a/2800b doublet (include_mgii) above, and giving this row a
+    # non-negligible narrow draw too would double-count that flux.
     NEW_LINE_PRIORS = {
         '[NeIII]_3869': dict(narrow_mean=np.log10(0.15),   narrow_sigma=0.30,
                               broad_mean=np.log10(0.02),    broad_sigma=0.50),
@@ -269,6 +292,20 @@ class EMSpectrum(object):
                               broad_mean=np.log10(0.003),   broad_sigma=0.50),
         '[SII]_4076':   dict(narrow_mean=np.log10(0.010),  narrow_sigma=0.35,
                               broad_mean=np.log10(0.002),   broad_sigma=0.50),
+        # broad_mean = log10(8.916/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC)
+        'SiIV_1400':    dict(narrow_mean=np.log10(1.0309) - 1.5, narrow_sigma=0.50,
+                              broad_mean=np.log10(1.0309),  broad_sigma=0.30),
+        # broad_mean = log10(25.291/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC)
+        'CIV_1549':     dict(narrow_mean=np.log10(2.9242) - 1.5, narrow_sigma=0.50,
+                              broad_mean=np.log10(2.9242),  broad_sigma=0.30),
+        # broad_mean = log10(15.943/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC)
+        'CIII]_1909':   dict(narrow_mean=np.log10(1.8433) - 1.5, narrow_sigma=0.50,
+                              broad_mean=np.log10(1.8433),  broad_sigma=0.30),
+        # broad_mean = log10(14.725/8.649); narrow_mean pinned negligible
+        # (⚠ MAGIC, see class-level comment above -- avoids double-
+        # counting the existing dedicated narrow MgII doublet).
+        'MgII_2798':    dict(narrow_mean=np.log10(1e-4),    narrow_sigma=0.50,
+                              broad_mean=np.log10(1.7025),  broad_sigma=0.30),
     }
     # ⚠ MAGIC: broad-line-region velocity SIGMA [km/s] is shared across all
     # seven broad components in a given spectrum() call, rather than each
@@ -341,8 +378,8 @@ class EMSpectrum(object):
             forbiddata.remove_rows(np.where(forbiddata['name'] == 'MgII_2800a')[0])
             forbiddata.remove_rows(np.where(forbiddata['name'] == 'MgII_2800b')[0])
 
-        # Handoff Sec 1.3: seven new lines (narrow + broad AGN-like tunable
-        # components), opt-in and removed by default exactly like MgII above
+        # Handoff Sec 1.3 + task #33: new lines (narrow + broad AGN-like
+        # tunable components), opt-in and removed by default exactly like MgII above
         # -- so every existing caller's default (opt-out) output is
         # unaffected.
         self.include_new_lines = include_new_lines
@@ -599,8 +636,9 @@ class EMSpectrum(object):
             # ratio feature itself.
             line['ratio'][is2800b] = line['ratio'][is2800a]/self.mgiidoublet
         
-        # Sec 1.3: seven new lines ([NeIII] 3869,3968; [OIII] 4363; HeII
-        # 4686; [NII] 5755; [SII] 4068,4076), each with an independent
+        # Sec 1.3 + task #33: NEW_LINE_NAMES lines ([NeIII] 3869,3968;
+        # [OIII] 4363; HeII 4686; [NII] 5755; [SII] 4068,4076; SiIV_1400;
+        # CIV_1549; CIII]_1909; MgII_2798), each with an independent
         # narrow-component ratio (resolved here) and broad-component ratio
         # (resolved and applied further below, after the Hbeta flux
         # normalization it depends on). The original author's own

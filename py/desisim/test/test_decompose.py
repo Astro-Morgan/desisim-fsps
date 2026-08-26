@@ -57,6 +57,16 @@ class TestCombineIntoChannels(unittest.TestCase):
         np.testing.assert_array_equal(out['emission'], narrow + feii)
         self.assertTrue(out['components']['feii_flux'])
 
+    def test_emission_bucket_sums_balmer_flux(self):
+        '''Task #32: the Balmer-continuum-plus-cascade flux lands in the
+        "emission" bucket, same reasoning as feii_flux.'''
+        cont = self._const(1.0)
+        narrow = self._const(0.1)
+        balmer = self._const(0.2)
+        out = combine_into_channels(self.wave, cont, narrow_emission=narrow, balmer_flux=balmer)
+        np.testing.assert_array_equal(out['emission'], narrow + balmer)
+        self.assertTrue(out['components']['balmer_flux'])
+
     def test_absorption_bucket_sums_ism_associated_dust_and_bal(self):
         '''The PI's clarified grouping: ISM/CGM absorption, the stochastic
         multi-system associated-absorption channel, BAL, and dust
@@ -93,7 +103,7 @@ class TestCombineIntoChannels(unittest.TestCase):
         cont = self._const(1.0)
         out = combine_into_channels(self.wave, cont)
         for key in ('continuum_agn', 'narrow_emission', 'broad_emission',
-                    'dust_scatter_excess', 'feii_flux', 'ism_absorption',
+                    'dust_scatter_excess', 'feii_flux', 'balmer_flux', 'ism_absorption',
                     'associated_absorption_flux', 'dust_flux', 'bal_flux'):
             self.assertFalse(out['components'][key])
 

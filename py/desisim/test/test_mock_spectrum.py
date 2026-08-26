@@ -166,12 +166,14 @@ class TestGenerateQsoComponent(unittest.TestCase):
         fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
         em_kwargs = dict(seed=99, hbetaflux=1e-16, **fixed_ratios)
 
-        # Zero out Fe II's contribution to 'emission' for this test -- it's
-        # checking EM's own narrow/broad subtraction in isolation, not the
-        # Fe II pseudo-continuum (which legitimately also lands in the
-        # 'emission' bucket -- see decompose.py's module docstring).
+        # Zero out Fe II's and the Balmer continuum's contributions to
+        # 'emission' for this test -- it's checking EM's own narrow/broad
+        # subtraction in isolation, not the other channels that legitimately
+        # also land in the 'emission' bucket (see decompose.py's module
+        # docstring).
         out = generate_qso_component(self.wave, em=em, em_kwargs=dict(em_kwargs),
-                                      feii_kwargs=dict(uv_norm=0.0, optical_norm=0.0), seed=5)
+                                      feii_kwargs=dict(uv_norm=0.0, optical_norm=0.0),
+                                      balmer_kwargs=dict(edge_norm=0.0, line_norm=0.0), seed=5)
 
         emflux_total, emwave, _ = em.spectrum(**em_kwargs)
         narrow_only = dict(em_kwargs)
@@ -211,6 +213,25 @@ class TestGenerateQsoComponent(unittest.TestCase):
         feii = FeIIPseudoContinuum(log10wave=np.log10(self.wave))
         out = generate_qso_component(self.wave, feii=feii,
                                       feii_kwargs=dict(uv_norm=1.0, optical_norm=1.0), seed=21)
+        self.assertTrue(np.all(np.isfinite(out['total'])))
+
+    def test_balmer_is_wired_into_emission_bucket(self):
+        '''Task #32 wiring check: the Balmer-continuum-plus-cascade flux
+        must actually land in the returned 'emission' array and provenance
+        dict -- zeroing it out via balmer_kwargs must measurably change
+        'emission' and 'total' relative to a real draw.'''
+        out_on = generate_qso_component(self.wave, seed=20)
+        out_off = generate_qso_component(self.wave, seed=20,
+                                          balmer_kwargs=dict(edge_norm=0.0, line_norm=0.0))
+        self.assertIn('balmer_params', out_on['draws'])
+        self.assertTrue(out_on['components']['balmer_flux'])
+        self.assertFalse(np.allclose(out_on['emission'], out_off['emission']))
+
+    def test_pre_built_balmer_instance_is_honored(self):
+        from desisim.balmer_continuum import BalmerContinuum
+        balmer = BalmerContinuum(log10wave=np.log10(self.wave))
+        out = generate_qso_component(self.wave, balmer=balmer,
+                                      balmer_kwargs=dict(edge_norm=1.0, line_norm=1.0), seed=21)
         self.assertTrue(np.all(np.isfinite(out['total'])))
 
 

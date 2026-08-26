@@ -74,6 +74,13 @@ implemented and tested elsewhere in this fork):
     process -- despite the "continuum" in its name, it does not belong in
     the "continuum" bucket, which is reserved for the stellar SED + AGN
     power-law per the PI's original 3-bucket specification.
+  - balmer_flux: BalmerContinuum (balmer_continuum.py, added 2026-08-26)
+    -- the hydrogen recombination cascade's free-bound Balmer continuum
+    (Grandi 1982 edge at 3646A) plus a broadened Lyalpha+Balmer(n=3..50)
+    line series sharing one (T_e, log n_e) physical state. Same reasoning
+    as feii_flux: lands in the "emission" bucket despite "continuum" in
+    the name, since both pieces are real emitted photons, not LOS light
+    removal.
 
 RESOLVED (2026-08-06): the dust-scattering-into-LOS excess -- dust/
 electron scattering redirecting light back INTO the line of sight (e.g.
@@ -150,7 +157,7 @@ import numpy as np
 def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_emission=None,
                            ism_absorption=None, associated_absorption_flux=None, dust_flux=None,
                            continuum_agn=None, dust_scatter_excess=None, bal_flux=None,
-                           feii_flux=None):
+                           feii_flux=None, balmer_flux=None):
     """Group already-generated additive channels into the PI-specified
     3-bucket decomposition (continuum / emission / absorption), plus the
     total. See module docstring for exactly what belongs in each bucket
@@ -195,6 +202,10 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
             continuum flux from FeIIPseudoContinuum.spectrum()
             (feii_continuum.py). Lands in the "emission" bucket (see
             module docstring). Default: zero.
+        balmer_flux (ndarray, optional): additive Balmer-continuum-plus-
+            cascade flux from BalmerContinuum.spectrum() (balmer_continuum.py).
+            Lands in the "emission" bucket (see module docstring). Default:
+            zero.
 
     Returns:
         dict with keys 'continuum', 'emission', 'absorption', 'total'
@@ -225,9 +236,10 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
     dust_flux_arr, has_dust = _resolve('dust_flux', dust_flux)
     bal_flux_arr, has_bal = _resolve('bal_flux', bal_flux)
     feii_flux_arr, has_feii = _resolve('feii_flux', feii_flux)
+    balmer_flux_arr, has_balmer = _resolve('balmer_flux', balmer_flux)
 
     continuum = continuum_stellar_arr + continuum_agn_arr
-    emission = narrow_emission_arr + broad_emission_arr + dust_scatter_arr + feii_flux_arr
+    emission = narrow_emission_arr + broad_emission_arr + dust_scatter_arr + feii_flux_arr + balmer_flux_arr
     absorption = ism_absorption_arr + associated_absorption_arr + dust_flux_arr + bal_flux_arr
     total = continuum + emission + absorption
 
@@ -238,6 +250,7 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
         'broad_emission': has_broad,
         'dust_scatter_excess': has_dust_scatter,
         'feii_flux': has_feii,
+        'balmer_flux': has_balmer,
         'ism_absorption': has_ism,
         'associated_absorption_flux': has_associated,
         'dust_flux': has_dust,

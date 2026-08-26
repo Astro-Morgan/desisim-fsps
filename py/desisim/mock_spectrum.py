@@ -248,10 +248,16 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
             None builds AGNPowerLawContinuum().
         agn_kwargs (dict, optional): forwarded to agn.spectrum().
         em (EMSpectrum, optional): pre-built instance. Default None builds
-            EMSpectrum(log10wave=np.log10(wave), include_new_lines=True)
-            -- broad lines require include_new_lines=True (see
-            templates.py: these are currently the ONLY lines EMSpectrum
-            can broaden).
+            EMSpectrum(log10wave=np.log10(wave), include_new_lines=True,
+            include_broad_velshift=True) -- broad lines require
+            include_new_lines=True (see templates.py: these are currently
+            the ONLY lines EMSpectrum can broaden); include_broad_velshift
+            defaults on HERE (unlike EMSpectrum's own class default)
+            so the broad lines' centroids are, by default, independently
+            offset from the narrow lines' (systemic-only) centroids --
+            see BROADSHIFT_KMS_RANGE's docstring for the physical
+            motivation. Pass a pre-built `em` with include_broad_velshift=
+            False (or broadshift_kms=0.0 via em_kwargs) to disable this.
         em_kwargs (dict, optional): forwarded to em.spectrum(). Do not
             pass new_line_broad_ratios here if you want it drawn; if you
             do pass it, that exact draw is honored (and re-used
@@ -302,7 +308,16 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     continuum_agn = _harmonize(wave, agnwave, agnflux)
 
     if em is None:
-        em = EMSpectrum(log10wave=np.log10(wave), include_new_lines=True)
+        # include_broad_velshift=True by default here (unlike EMSpectrum's
+        # own class default of False): real quasars essentially always
+        # show some broad-line centroid offset from systemic (see
+        # BROADSHIFT_KMS_RANGE's docstring), so this orchestrator opts
+        # every default-built QSO component into that decoupling rather
+        # than requiring every caller to remember to pass it via
+        # em_kwargs. A caller building their own `em` instance (or passing
+        # broadshift_kms=0.0 explicitly via em_kwargs) can still turn it
+        # back off.
+        em = EMSpectrum(log10wave=np.log10(wave), include_new_lines=True, include_broad_velshift=True)
     em_kwargs.setdefault('seed', seed_em)
     emflux_total, emwave, emline_total = em.spectrum(**em_kwargs)
 

@@ -234,6 +234,20 @@ class TestGenerateQsoComponent(unittest.TestCase):
                                       balmer_kwargs=dict(edge_norm=1.0, line_norm=1.0), seed=21)
         self.assertTrue(np.all(np.isfinite(out['total'])))
 
+    def test_broad_velshift_decoupled_from_narrow_by_default(self):
+        '''generate_qso_component's default EMSpectrum passes
+        include_broad_velshift=True (unlike EMSpectrum's own class
+        default), so the drawn broadshift_kms for the NEW_LINE_NAMES
+        broad rows should be nonzero without the caller doing anything
+        special -- verified via the returned em_line_total table (narrow
+        rows carry no broadshift_kms column; only the *_broad rows do).'''
+        out = generate_qso_component(self.wave, seed=42)
+        line = out['draws']['em_line_total']
+        broad_rows = line[[n.endswith('_broad') for n in line['name']]]
+        self.assertGreater(len(broad_rows), 0)
+        self.assertTrue(np.all(broad_rows['broadshift_kms'] == broad_rows['broadshift_kms'][0]))
+        self.assertNotEqual(float(broad_rows['broadshift_kms'][0]), 0.0)
+
 
 @unittest.skipUnless(_HAS_SIMQSO, 'requires simqso')
 class TestGenerateBlendedSpectrum(unittest.TestCase):

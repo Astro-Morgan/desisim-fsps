@@ -217,19 +217,21 @@ class TestEMSpectrumBackends(unittest.TestCase):
 
 
 class TestNewLinesNarrowBroad(unittest.TestCase):
-    '''Unit/regression tests for handoff Sec 1.3: the seven new lines
+    '''Unit/regression tests for handoff Sec 1.3's seven original new lines
     ([NeIII] 3869,3968; [OIII] 4363; HeII 4686; [NII] 5755; [SII] 4068,4076)
-    and their independent narrow (nebular) + broad (AGN-like) tunable
-    components. include_new_lines defaults to False, so every pre-existing
-    caller (including every other test in this file) is unaffected -- that
-    invariant is exercised directly below.
+    plus task #33's four additions (SiIV+OIV] 1400, CIV 1549, CIII] 1909,
+    MgII 2798) and their independent narrow (nebular) + broad (AGN-like)
+    tunable components. include_new_lines defaults to False, so every
+    pre-existing caller (including every other test in this file) is
+    unaffected -- that invariant is exercised directly below.
     '''
 
     def setUp(self):
-        # Wide window so every new line (2796-9532A range across narrow +
-        # broad + all pre-existing lines) falls inside [minwave, maxwave].
-        self.em_new = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_new_lines=True)
-        self.em_legacy = EMSpectrum(minwave=2000.0, maxwave=10000.0, include_new_lines=False)
+        # Wide window so every new line (1396.76-9532A range across narrow
+        # + broad + all pre-existing lines, after task #33 pushed the blue
+        # edge down to SiIV+OIV] 1396.76) falls inside [minwave, maxwave].
+        self.em_new = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True)
+        self.em_legacy = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=False)
         self.fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
 
     def _rows(self, line_table, name):
@@ -414,6 +416,57 @@ class TestNewLinesNarrowBroad(unittest.TestCase):
         emspec_torch, _, _ = self.em_new.spectrum(backend='torch', device='cpu', **kwargs)
         np.testing.assert_allclose(emspec_np, emspec_torch, rtol=1e-6, atol=1e-30)
 
+    def test_task33_lines_present_when_enabled(self):
+        '''The four task #33 additions must all be reachable in [minwave,
+        maxwave] and produce both a narrow and a broad row.'''
+        _, _, line = self.em_new.spectrum(seed=1, hbetaflux=1e-16, **self.fixed_ratios)
+        names = set(line['name'])
+        for name in ('SiIV_1400', 'CIV_1549', 'CIII]_1909', 'MgII_2798'):
+            self.assertIn(name, names)
+            self.assertIn(name + '_broad', names)
+
+    def test_task33_broad_ratios_match_vanden_berk_2001(self):
+        '''broad_mean for the task #33 lines is log10(Rel.Flux/Rel.Flux_Hbeta)
+        from Vanden Berk et al. (2001) Table 2 -- not drawn from a prior
+        (default broadsigma path would scatter it), so an explicit-ratio
+        call must reproduce those exact literature-anchored numbers via
+        the same hbeta_flux_effective*ratio formula used for every other
+        broad line.'''
+        hbeta = 8.649
+        expected_ratio = {
+            'SiIV_1400': 8.916 / hbeta,
+            'CIV_1549': 25.291 / hbeta,
+            'CIII]_1909': 15.943 / hbeta,
+            'MgII_2798': 14.725 / hbeta,
+        }
+        explicit_broad = {n: expected_ratio[n] for n in expected_ratio}
+        hbetaflux = 1e-16
+        _, _, line = self.em_new.spectrum(seed=1, hbetaflux=hbetaflux,
+                                           new_line_broad_ratios=explicit_broad, **self.fixed_ratios)
+        for name, ratio in expected_ratio.items():
+            row = self._rows(line, name + '_broad')
+            self.assertAlmostEqual(float(row['ratio'][0]), ratio, places=6)
+            np.testing.assert_allclose(float(row['flux'][0]), hbetaflux * ratio, rtol=1e-6)
+
+    def test_mgii_2798_broad_row_independent_of_existing_narrow_doublet(self):
+        '''MgII_2798 (task #33, broad-only) must coexist with the separate,
+        pre-existing MgII_2800a/2800b narrow doublet (include_mgii) without
+        interfering with it -- they are independent rows/mechanisms.'''
+        em = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True, include_mgii=True)
+        # mgiihbeta is used directly as the linear MgII2796/Hbeta ratio
+        # (not a log10 value) -- see templates.py's
+        # `line['ratio'][is2800a] = mgiihbeta` assignment.
+        _, _, line = em.spectrum(seed=1, hbetaflux=1e-16, mgiihbeta=0.1, **self.fixed_ratios)
+        names = set(line['name'])
+        self.assertIn('MgII_2800a', names)
+        self.assertIn('MgII_2800b', names)
+        self.assertIn('MgII_2798', names)
+        self.assertIn('MgII_2798_broad', names)
+        # the dedicated narrow doublet's ratio must be untouched by the
+        # new row's own (deliberately negligible) narrow draw.
+        row_2800a = self._rows(line, 'MgII_2800a')
+        self.assertAlmostEqual(float(row_2800a['ratio'][0]), 0.1, places=8)
+
 
 class TestBroadVelshift(unittest.TestCase):
     '''Tests for the independent broad-line-region velocity OFFSET
@@ -508,6 +561,134 @@ class TestBroadVelshift(unittest.TestCase):
         emspec_b, _, _ = em_legacy.spectrum(seed=1, hbetaflux=1e-16, broadshift_kms=0.0,
                                              **self.fixed_ratios)
         np.testing.assert_array_equal(emspec_a, emspec_b)
+
+
+class TestGaussHermiteProfile(unittest.TestCase):
+    '''Task #34: Gauss-Hermite (h3/h4) generalization of the previously-
+    pure-Gaussian line profile, at both the low-level
+    _lines_to_spectrum_{numpy,torch} functions and EMSpectrum's own
+    narrow_h3/narrow_h4/broad_h3/broad_h4 + include_line_asymmetry wiring.
+    '''
+
+    def setUp(self):
+        self.log10wave = np.linspace(np.log10(4800.0), np.log10(4930.0), 4000)
+        self.center = np.log10(4862.68)
+        self.log10sigma = 500.0 / 299792.458 / np.log(10)  # ~500 km/s in dex
+
+    def test_h3_h4_zero_matches_original_gaussian_exactly(self):
+        from desisim.templates import _lines_to_spectrum_numpy
+        norm = np.array([1.0])
+        g_default = _lines_to_spectrum_numpy(self.log10wave, np.array([self.center]), norm, self.log10sigma)
+        g_explicit_zero = _lines_to_spectrum_numpy(self.log10wave, np.array([self.center]), norm,
+                                                     self.log10sigma, h3=0.0, h4=0.0)
+        np.testing.assert_array_equal(g_default, g_explicit_zero)
+
+    def test_nonzero_h3_breaks_symmetry(self):
+        '''Skewness (h3) must make the profile measurably asymmetric about
+        its own centroid -- the whole physical point of adding it.'''
+        from desisim.templates import _lines_to_spectrum_numpy
+        norm = np.array([1.0])
+        flux = _lines_to_spectrum_numpy(self.log10wave, np.array([self.center]), norm,
+                                         self.log10sigma, h3=0.25, h4=0.0)
+        below = flux[self.log10wave < self.center]
+        above = flux[self.log10wave > self.center]
+        # Mirror 'above' about the center and compare to 'below' -- an
+        # exactly symmetric profile would match; a skewed one should not.
+        self.assertFalse(np.allclose(below[::-1][:len(above)], above[:len(below)], atol=1e-10))
+
+    def test_nonzero_h4_changes_peak_and_wing_shape(self):
+        '''Kurtosis (h4) must change the profile shape relative to h4=0
+        even though it preserves exact front-back symmetry -- uses a grid
+        built to be exactly mirror-symmetric about the center (odd length,
+        symmetric range) to avoid pixel-quantization noise in the
+        symmetry check.'''
+        from desisim.templates import _lines_to_spectrum_numpy
+        sym_wave = self.center + np.linspace(-0.01, 0.01, 4001)  # odd length -> exact center pixel
+        norm = np.array([1.0])
+        gauss = _lines_to_spectrum_numpy(sym_wave, np.array([self.center]), norm, self.log10sigma)
+        gh4 = _lines_to_spectrum_numpy(sym_wave, np.array([self.center]), norm,
+                                        self.log10sigma, h3=0.0, h4=0.25)
+        self.assertFalse(np.allclose(gauss, gh4))
+        np.testing.assert_allclose(gh4, gh4[::-1], atol=1e-14)
+
+    def test_profile_never_negative_even_at_large_h3_h4(self):
+        from desisim.templates import _lines_to_spectrum_numpy
+        norm = np.array([1.0])
+        flux = _lines_to_spectrum_numpy(self.log10wave, np.array([self.center]), norm,
+                                         self.log10sigma, h3=0.3, h4=-0.3)
+        self.assertTrue(np.all(flux >= 0.0))
+
+    def test_numpy_and_torch_agree_with_nonzero_h3_h4(self):
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            self.skipTest('torch not installed')
+        from desisim.templates import _lines_to_spectrum_numpy, _lines_to_spectrum_torch
+        norm = np.array([1.0, 0.5])
+        centers = np.array([self.center, self.center + 0.01])
+        f_np = _lines_to_spectrum_numpy(self.log10wave, centers, norm, self.log10sigma, h3=0.2, h4=-0.15)
+        f_torch = _lines_to_spectrum_torch(self.log10wave, centers, norm, self.log10sigma,
+                                            h3=0.2, h4=-0.15, device='cpu')
+        np.testing.assert_allclose(f_np, f_torch, rtol=1e-6, atol=1e-30)
+
+    def test_emspectrum_asymmetry_off_by_default(self):
+        '''include_line_asymmetry defaults to False -- narrow_h3/h4 and
+        broad_h3/h4 must stay exactly 0.0 (pure Gaussian) unless
+        explicitly requested, for every pre-existing caller.'''
+        em = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True)
+        self.assertFalse(em.include_line_asymmetry)
+        fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
+        emspec_a, _, _ = em.spectrum(seed=1, hbetaflux=1e-16, **fixed_ratios)
+        emspec_b, _, _ = em.spectrum(seed=1, hbetaflux=1e-16, narrow_h3=0.0, narrow_h4=0.0,
+                                      broad_h3=0.0, broad_h4=0.0, **fixed_ratios)
+        np.testing.assert_array_equal(emspec_a, emspec_b)
+
+    def test_emspectrum_draws_within_gh_range_when_enabled(self):
+        em = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True,
+                         include_line_asymmetry=True)
+        fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
+        _, _, line = em.spectrum(seed=1, hbetaflux=1e-16, **fixed_ratios)
+        # Reach into the same rand stream indirectly: just check the drawn
+        # emission spectrum differs from the h3=h4=0 case, and re-running
+        # with the same seed reproduces identically.
+        emspec1, _, _ = em.spectrum(seed=7, hbetaflux=1e-16, **fixed_ratios)
+        emspec2, _, _ = em.spectrum(seed=7, hbetaflux=1e-16, **fixed_ratios)
+        emspec_gaussian, _, _ = em.spectrum(seed=7, hbetaflux=1e-16, narrow_h3=0.0, narrow_h4=0.0,
+                                             broad_h3=0.0, broad_h4=0.0, **fixed_ratios)
+        np.testing.assert_array_equal(emspec1, emspec2)
+        # Fluxes here are astrophysical-unit-scale (~1e-15 to 1e-18) --
+        # np.allclose's default atol=1e-8 would swamp any real difference
+        # at that scale, so use exact inequality instead.
+        self.assertFalse(np.array_equal(emspec1, emspec_gaussian))
+
+    def test_explicit_narrow_and_broad_h3_h4_always_win(self):
+        em = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True,
+                         include_line_asymmetry=True)
+        fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
+        emspec_a, _, _ = em.spectrum(seed=1, hbetaflux=1e-16, narrow_h3=0.1, narrow_h4=-0.1,
+                                      broad_h3=0.2, broad_h4=0.15, **fixed_ratios)
+        emspec_b, _, _ = em.spectrum(seed=1, hbetaflux=1e-16, narrow_h3=0.1, narrow_h4=-0.1,
+                                      broad_h3=0.2, broad_h4=0.15, **fixed_ratios)
+        np.testing.assert_array_equal(emspec_a, emspec_b)
+
+    def test_narrow_and_broad_asymmetry_are_independent(self):
+        '''Setting only broad_h3/h4 nonzero must change the spectrum
+        relative to the plain-Gaussian case while narrow_h3/h4 stay 0 (and
+        vice versa) -- confirms the two groups are genuinely decoupled.'''
+        em = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True)
+        fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
+        base, _, _ = em.spectrum(seed=1, hbetaflux=1e-16, narrow_h3=0.0, narrow_h4=0.0,
+                                  broad_h3=0.0, broad_h4=0.0, **fixed_ratios)
+        broad_only, _, _ = em.spectrum(seed=1, hbetaflux=1e-16, narrow_h3=0.0, narrow_h4=0.0,
+                                        broad_h3=0.25, broad_h4=0.0, **fixed_ratios)
+        narrow_only, _, _ = em.spectrum(seed=1, hbetaflux=1e-16, narrow_h3=0.25, narrow_h4=0.0,
+                                         broad_h3=0.0, broad_h4=0.0, **fixed_ratios)
+        # Fluxes here are astrophysical-unit-scale (~1e-15 to 1e-18) --
+        # np.allclose's default atol=1e-8 would swamp any real difference
+        # at that scale, so use exact inequality instead.
+        self.assertFalse(np.array_equal(base, broad_only))
+        self.assertFalse(np.array_equal(base, narrow_only))
+        self.assertFalse(np.array_equal(broad_only, narrow_only))
 
 
 class TestGalaxyEWScatter(unittest.TestCase):

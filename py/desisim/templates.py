@@ -76,10 +76,28 @@ def _use_torch_backend(backend):
     raise ValueError("backend must be one of 'auto', 'torch', 'numpy'; got {!r}".format(backend))
 
 
-def _lines_to_spectrum_numpy(log10wave, linecenters, norm, log10sigma):
-    """Reference (numpy) implementation of summing Gaussian emission-line
-    profiles onto a log10-wavelength grid, windowed to +/-6*log10sigma per
-    line (matches the original per-line Python loop this replaces).
+def _lines_to_spectrum_numpy(log10wave, linecenters, norm, log10sigma, h3=0.0, h4=0.0):
+    """Reference (numpy) implementation of summing emission-line profiles
+    onto a log10-wavelength grid, windowed to +/-6*log10sigma per line
+    (matches the original per-line Python loop this replaces).
+
+    Task #34: h3/h4 generalize the pure-Gaussian profile to a Gauss-
+    Hermite (GH) series (van der Marel & Franx 1993 normalization),
+
+        profile(w) = exp(-w^2/2) * [1 + h3*H3(w) + h4*H4(w)],  w = (x-center)/sigma
+        H3(w) = (2*sqrt(2)*w^3 - 3*sqrt(2)*w) / sqrt(6)
+        H4(w) = (4*w^4 - 12*w^2 + 3) / sqrt(24)
+
+    h3 controls skewness (asymmetric wings -- e.g. CIV's disk-wind-driven
+    blueshift/asymmetry), h4 controls kurtosis (peakier core + heavier
+    wings than Gaussian for h4>0, e.g. the Lorentzian-like Hbeta profiles
+    documented for high-Eddington-ratio "Population A" AGN). h3=h4=0
+    recovers the plain Gaussian exactly -- see module docstring reasoning
+    in EMSpectrum's GH_RANGE class comment. The GH correction can drive
+    the bracket slightly negative in the far wings for nonzero h3/h4
+    (a known property of the functional form, not a bug); physical
+    emission flux cannot be negative, so the result is clipped at 0
+    after the correction is applied.
 
     Parameters
     ----------
@@ -94,6 +112,13 @@ def _lines_to_spectrum_numpy(log10wave, linecenters, norm, log10sigma):
     log10sigma : float
         Common line-width [dex] shared by all lines (EMSpectrum only
         supports a single linesigma per call).
+    h3, h4 : float
+        Shared Gauss-Hermite shape parameters (one pair per call, same
+        "one shared parameter per line-group" simplification already used
+        for log10sigma itself -- see EMSpectrum.GH_RANGE). Default 0.0:
+        bit-for-bit identical to the pre-task-#34 pure-Gaussian formula
+        (the h3==0 and h4==0 fast path below is the literal original
+        expression, unchanged).
 
     Returns
     -------
@@ -101,26 +126,42 @@ def _lines_to_spectrum_numpy(log10wave, linecenters, norm, log10sigma):
     """
     import numpy as np
     emspec = np.zeros_like(log10wave)
+    if h3 == 0.0 and h4 == 0.0:
+        for center, n in zip(linecenters, norm):
+            jj = np.abs(log10wave - center) < 6 * log10sigma
+            emspec[jj] += n * np.exp(-0.5 * (log10wave[jj] - center) ** 2 / log10sigma ** 2)
+        return emspec
+    sqrt2 = np.sqrt(2.0)
     for center, n in zip(linecenters, norm):
         jj = np.abs(log10wave - center) < 6 * log10sigma
-        emspec[jj] += n * np.exp(-0.5 * (log10wave[jj] - center) ** 2 / log10sigma ** 2)
+        w = (log10wave[jj] - center) / log10sigma
+        gauss = np.exp(-0.5 * w ** 2)
+        H3 = (2.0 * sqrt2 * w ** 3 - 3.0 * sqrt2 * w) / np.sqrt(6.0)
+        H4 = (4.0 * w ** 4 - 12.0 * w ** 2 + 3.0) / np.sqrt(24.0)
+        profile = np.clip(gauss * (1.0 + h3 * H3 + h4 * H4), 0.0, None)
+        emspec[jj] += n * profile
     return emspec
 
 
-def _lines_to_spectrum_torch(log10wave, linecenters, norm, log10sigma, device=None, dtype=None):
+def _lines_to_spectrum_torch(log10wave, linecenters, norm, log10sigma, h3=0.0, h4=0.0, device=None, dtype=None):
     """Vectorized/batched torch equivalent of _lines_to_spectrum_numpy,
     evaluated on `device` (auto CPU/CUDA-detected via
     desisim.torch_utils.get_device if device is None).
 
     Numerically equivalent to _lines_to_spectrum_numpy to floating-point
     summation-order precision (both apply the identical +/-6*log10sigma
-    window and the identical closed-form Gaussian; see
-    test_templates.py::TestEMSpectrumBackends for the equivalence test).
-    Runs as a single batched [nline, npix] tensor op rather than a Python
-    loop over lines, which is the actual point of this backend: for large
-    nline*npix (e.g. once Sec 1.3's additional narrow+broad lines land, or
-    when batching many spectra) this is dramatically faster on GPU than the
-    per-line Python loop, and still faster than numpy on CPU.
+    window and the identical closed-form Gaussian/Gauss-Hermite profile;
+    see test_templates.py::TestEMSpectrumBackends for the equivalence
+    test). Runs as a single batched [nline, npix] tensor op rather than a
+    Python loop over lines, which is the actual point of this backend: for
+    large nline*npix (e.g. once Sec 1.3's additional narrow+broad lines
+    land, or when batching many spectra) this is dramatically faster on
+    GPU than the per-line Python loop, and still faster than numpy on CPU.
+
+    h3, h4: see _lines_to_spectrum_numpy's docstring for the Gauss-Hermite
+    functional form -- identical formula, vectorized. Default 0.0: the
+    h3==0 and h4==0 fast path below is the original pre-task-#34
+    expression, unchanged.
     """
     import numpy as np
     import torch
@@ -136,7 +177,16 @@ def _lines_to_spectrum_torch(log10wave, linecenters, norm, log10sigma, device=No
     dist = wave_t - centers_t                                    # [nline, npix]
     mask = dist.abs() < (6.0 * log10sigma)
     zero = torch.zeros((), device=dev, dtype=dt)
-    profile = torch.where(mask, norm_t * torch.exp(-0.5 * (dist / log10sigma) ** 2), zero)
+    if h3 == 0.0 and h4 == 0.0:
+        profile = torch.where(mask, norm_t * torch.exp(-0.5 * (dist / log10sigma) ** 2), zero)
+    else:
+        w = dist / log10sigma
+        gauss = torch.exp(-0.5 * w ** 2)
+        sqrt2 = 2.0 ** 0.5
+        H3 = (2.0 * sqrt2 * w ** 3 - 3.0 * sqrt2 * w) / (6.0 ** 0.5)
+        H4 = (4.0 * w ** 4 - 12.0 * w ** 2 + 3.0) / (24.0 ** 0.5)
+        gh = torch.clamp(gauss * (1.0 + h3 * H3 + h4 * H4), min=0.0)
+        profile = torch.where(mask, norm_t * gh, zero)
     emspec = profile.sum(dim=0)
     # NOTE: intentionally not using Tensor.numpy() here. That zero-copy
     # bridge relies on a numpy C-API ABI that older torch builds (compiled
@@ -174,8 +224,8 @@ class EMSpectrum(object):
         log10wave (numpy.ndarray, optional): Input/output wavelength array
             (log10-Angstrom, default None).
         include_mgii (bool, optional): Include Mg II in emission (default False).
-        include_new_lines (bool, optional): Include the seven Sec 1.3
-            narrow+broad AGN-like lines (default False).
+        include_new_lines (bool, optional): Include the Sec 1.3 / task #33
+            narrow+broad AGN-like lines (NEW_LINE_NAMES; default False).
         include_broad_velshift (bool, optional): default False (legacy
             behavior -- broadshift_kms forced to 0.0 unless explicitly
             given in spectrum()). If True, spectrum() draws broadshift_kms
@@ -183,6 +233,13 @@ class EMSpectrum(object):
             an effect when include_new_lines=True (there are no broad
             lines to shift otherwise). See BROADSHIFT_KMS_RANGE's
             class-level comment for the physical justification.
+        include_line_asymmetry (bool, optional): default False (legacy
+            behavior -- narrow_h3/narrow_h4/broad_h3/broad_h4 forced to
+            0.0, i.e. plain Gaussian profiles, unless explicitly given in
+            spectrum()). If True, spectrum() draws any of those four not
+            explicitly given from GH_RANGE. See GH_RANGE's class-level
+            comment for the Gauss-Hermite functional form and physical
+            justification.
 
     Attributes:
         log10wave (numpy.ndarray): Wavelength array constructed from the input arguments.
@@ -223,10 +280,12 @@ class EMSpectrum(object):
         'mgiihbeta':  dict(mean=np.log10(0.3),  sigma=0.30),  # ⚠ MAGIC sigma
     }
 
-    # Handoff Sec 1.3: seven newly-added lines, each with an independent
-    # narrow (nebular) AND broad (AGN-like) tunable component, per explicit
-    # project requirement ("every newly added line needs both... not a
-    # single fixed-width line"). NEW_LINE_NAMES must match the 'name'
+    # Handoff Sec 1.3 (seven lines) + task #33 (four more: SiIV_1400,
+    # CIV_1549, CIII]_1909, MgII_2798): each newly-added line gets an
+    # independent narrow (nebular) AND broad (AGN-like) tunable component,
+    # per explicit project requirement ("every newly added line needs
+    # both... not a single fixed-width line"). NEW_LINE_NAMES must match
+    # the 'name'
     # column values in forbidden_lines.ecsv/recombination_lines.ecsv
     # exactly (see those files' 2026-08-06 additions).
     #
@@ -253,7 +312,28 @@ class EMSpectrum(object):
     #    every new line, not because real spectra typically show strong
     #    broad components on auroral lines.
     NEW_LINE_NAMES = ['[NeIII]_3869', '[NeIII]_3968', '[OIII]_4363',
-                       'HeII_4686', '[NII]_5755', '[SII]_4068', '[SII]_4076']
+                       'HeII_4686', '[NII]_5755', '[SII]_4068', '[SII]_4076',
+                       'SiIV_1400', 'CIV_1549', 'CIII]_1909', 'MgII_2798']
+    # Task #33: broad_mean for the last four lines is NOT a MAGIC guess --
+    # it is log10(Rel.Flux_line / Rel.Flux_Hbeta) read directly from Vanden
+    # Berk et al. (2001, AJ 122, 549) Table 2's composite-quasar emission-
+    # line list (their "Rel. Flux = 100*F/F(Lyalpha)" column, so the
+    # Lyalpha normalization cancels in this ratio): SiIV+OIV] 1396.76 =
+    # 8.916, CIV 1549.06 = 25.291, CIII] 1908.73 = 15.943, MgII 2798.75 =
+    # 14.725, Hbeta 4862.68 = 8.649 (all in that same table). broad_sigma
+    # for those four is smaller (0.30 dex) than the ⚠ MAGIC entries below
+    # since it reflects genuine object-to-object scatter around a measured
+    # median, not a placeholder. narrow_mean for those same four IS ⚠
+    # MAGIC (no analogous measurement used here): CIV/CIII]/SiIV are high-
+    # ionization resonance/semi-forbidden lines with only a weak, poorly-
+    # constrained narrow-line-region contribution in most Type 1 QSOs, set
+    # here to ~3% of the (measured) broad amplitude as a placeholder,
+    # deferred to NPE calibration like every other ⚠ MAGIC entry.
+    # MgII_2798's narrow_mean is deliberately pinned far smaller still
+    # (~1e-4 of Hbeta) -- this row exists ONLY to carry a broad component;
+    # narrow MgII is already fully handled by the separate, pre-existing
+    # MgII_2800a/2800b doublet (include_mgii) above, and giving this row a
+    # non-negligible narrow draw too would double-count that flux.
     NEW_LINE_PRIORS = {
         '[NeIII]_3869': dict(narrow_mean=np.log10(0.15),   narrow_sigma=0.30,
                               broad_mean=np.log10(0.02),    broad_sigma=0.50),
@@ -269,6 +349,20 @@ class EMSpectrum(object):
                               broad_mean=np.log10(0.003),   broad_sigma=0.50),
         '[SII]_4076':   dict(narrow_mean=np.log10(0.010),  narrow_sigma=0.35,
                               broad_mean=np.log10(0.002),   broad_sigma=0.50),
+        # broad_mean = log10(8.916/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC)
+        'SiIV_1400':    dict(narrow_mean=np.log10(1.0309) - 1.5, narrow_sigma=0.50,
+                              broad_mean=np.log10(1.0309),  broad_sigma=0.30),
+        # broad_mean = log10(25.291/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC)
+        'CIV_1549':     dict(narrow_mean=np.log10(2.9242) - 1.5, narrow_sigma=0.50,
+                              broad_mean=np.log10(2.9242),  broad_sigma=0.30),
+        # broad_mean = log10(15.943/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC)
+        'CIII]_1909':   dict(narrow_mean=np.log10(1.8433) - 1.5, narrow_sigma=0.50,
+                              broad_mean=np.log10(1.8433),  broad_sigma=0.30),
+        # broad_mean = log10(14.725/8.649); narrow_mean pinned negligible
+        # (⚠ MAGIC, see class-level comment above -- avoids double-
+        # counting the existing dedicated narrow MgII doublet).
+        'MgII_2798':    dict(narrow_mean=np.log10(1e-4),    narrow_sigma=0.50,
+                              broad_mean=np.log10(1.7025),  broad_sigma=0.30),
     }
     # ⚠ MAGIC: broad-line-region velocity SIGMA [km/s] is shared across all
     # seven broad components in a given spectrum() call, rather than each
@@ -302,8 +396,33 @@ class EMSpectrum(object):
     # BROADSIGMA_RANGE_KMS above.
     BROADSHIFT_KMS_RANGE = (-1000.0, 200.0)  # ⚠ MAGIC
 
+    # Task #34: Gauss-Hermite (van der Marel & Franx 1993 normalization)
+    # shape corrections h3 (skewness -- asymmetric wings, e.g. CIV's disk-
+    # wind-driven blueshift/asymmetry) and h4 (kurtosis -- peakier core +
+    # heavier wings than Gaussian for h4>0, matching the Lorentzian-like
+    # Hbeta profiles documented for high-Eddington-ratio "Population A"
+    # AGN; Sulentic et al. 2000; see this project's task #34 design
+    # discussion). h3=h4=0 is the plain Gaussian this fork used
+    # exclusively before this task -- see _lines_to_spectrum_numpy's
+    # docstring for the functional form. One shared (h3, h4) pair for the
+    # WHOLE narrow-line group and a separate shared pair for the WHOLE
+    # broad-line group per call -- the same "one shared parameter per
+    # line-group, not per individual line" simplification already used
+    # for linesigma/broadsigma (see BROADSIGMA_RANGE_KMS's comment); a
+    # future per-line refinement is possible but not implemented here.
+    # ⚠ MAGIC: this range is NOT fit to any AGN dataset -- no AGN-specific
+    # calibration of h3/h4 was found in the literature search backing this
+    # task. It is inherited from the general Gauss-Hermite dynamical-
+    # modeling literature's own validity heuristic (van der Marel & Franx
+    # 1993; Cappellari et al. 2002): |h3|, |h4| beyond roughly this scale
+    # start producing implausibly large negative excursions in the profile
+    # wings even after clipping. Deferred to NPE calibration like every
+    # other ⚠ MAGIC range in this fork.
+    GH_RANGE = (-0.3, 0.3)
+
     def __init__(self, minwave=3650.0, maxwave=7075.0, cdelt_kms=20.0, log10wave=None,
-                 include_mgii=False, include_new_lines=False, include_broad_velshift=False):
+                 include_mgii=False, include_new_lines=False, include_broad_velshift=False,
+                 include_line_asymmetry=False):
 
         from importlib import resources
         from astropy.table import Table, Column, vstack
@@ -341,8 +460,8 @@ class EMSpectrum(object):
             forbiddata.remove_rows(np.where(forbiddata['name'] == 'MgII_2800a')[0])
             forbiddata.remove_rows(np.where(forbiddata['name'] == 'MgII_2800b')[0])
 
-        # Handoff Sec 1.3: seven new lines (narrow + broad AGN-like tunable
-        # components), opt-in and removed by default exactly like MgII above
+        # Handoff Sec 1.3 + task #33: new lines (narrow + broad AGN-like
+        # tunable components), opt-in and removed by default exactly like MgII above
         # -- so every existing caller's default (opt-out) output is
         # unaffected.
         self.include_new_lines = include_new_lines
@@ -351,6 +470,12 @@ class EMSpectrum(object):
                 recombdata.remove_rows(np.where(recombdata['name'] == _newname)[0])
                 forbiddata.remove_rows(np.where(forbiddata['name'] == _newname)[0])
         self.include_broad_velshift = include_broad_velshift
+
+        # Task #34: brand-new capability on an already-deployed module --
+        # stays a no-op (h3=h4=0.0, exact pre-task-#34 Gaussian behavior)
+        # unless explicitly opted into, same convention as
+        # include_broad_velshift/include_outflow_velshift.
+        self.include_line_asymmetry = include_line_asymmetry
 
         line = vstack([recombdata,forbiddata], metadata_conflicts='silent')
 
@@ -374,6 +499,7 @@ class EMSpectrum(object):
                  vary_auxlines=False, auxline_priors=None,
                  new_line_ratios=None, new_line_broad_ratios=None,
                  new_line_priors=None, broadsigma=None, broadshift_kms=None,
+                 narrow_h3=None, narrow_h4=None, broad_h3=None, broad_h4=None,
                  linesigma=75.0, zshift=0.0, oiiflux=None, hbetaflux=None,
                  seed=None, backend='auto', device=None, dtype=None):
         """Build the actual emission-line spectrum.
@@ -468,6 +594,18 @@ class EMSpectrum(object):
                 to the constructor, in which case it draws uniformly from
                 BROADSHIFT_KMS_RANGE. Only has an effect when
                 include_new_lines=True.
+            narrow_h3, narrow_h4 (float, optional): Task #34 -- shared
+                Gauss-Hermite skewness/kurtosis for the WHOLE narrow-line
+                group (see GH_RANGE's class-level comment for the
+                functional form). Default None: forced to 0.0 (plain
+                Gaussian, exact pre-task-#34 behavior) unless
+                include_line_asymmetry=True was passed to the constructor,
+                in which case each not-explicitly-given value draws
+                uniformly from GH_RANGE.
+            broad_h3, broad_h4 (float, optional): Same as narrow_h3/
+                narrow_h4 but for the WHOLE broad-line group (independent
+                draws/values -- narrow and broad need not share the same
+                shape). Only has an effect when include_new_lines=True.
             linesigma (float, optional): Intrinsic emission-line velocity width/sigma
                 (default 75 km/s).  A sensible range is [30-150].
             zshift (float, optional): Perturb the emission lines from their laboratory
@@ -510,6 +648,14 @@ class EMSpectrum(object):
         from astropy.table import Table, vstack
 
         rand = np.random.RandomState(seed)
+
+        # Task #34: narrow-line Gauss-Hermite shape, resolved unconditionally
+        # (narrow lines exist regardless of include_new_lines). See
+        # GH_RANGE's class-level comment for the functional form/rationale.
+        if narrow_h3 is None:
+            narrow_h3 = rand.uniform(*self.GH_RANGE) if self.include_line_asymmetry else 0.0
+        if narrow_h4 is None:
+            narrow_h4 = rand.uniform(*self.GH_RANGE) if self.include_line_asymmetry else 0.0
 
         line = self.line.copy()
         nline = len(line)
@@ -599,8 +745,9 @@ class EMSpectrum(object):
             # ratio feature itself.
             line['ratio'][is2800b] = line['ratio'][is2800a]/self.mgiidoublet
         
-        # Sec 1.3: seven new lines ([NeIII] 3869,3968; [OIII] 4363; HeII
-        # 4686; [NII] 5755; [SII] 4068,4076), each with an independent
+        # Sec 1.3 + task #33: NEW_LINE_NAMES lines ([NeIII] 3869,3968;
+        # [OIII] 4363; HeII 4686; [NII] 5755; [SII] 4068,4076; SiIV_1400;
+        # CIV_1549; CIII]_1909; MgII_2798), each with an independent
         # narrow-component ratio (resolved here) and broad-component ratio
         # (resolved and applied further below, after the Hbeta flux
         # normalization it depends on). The original author's own
@@ -641,6 +788,15 @@ class EMSpectrum(object):
                     # explicitly opted into (same convention as
                     # AbsorptionSpectrum.include_outflow_velshift).
                     broadshift_kms = 0.0
+
+            # Task #34: broad-line Gauss-Hermite shape, resolved here since
+            # only the broad-line group (which only exists when
+            # include_new_lines=True) uses these. See GH_RANGE's class-
+            # level comment for the functional form/rationale.
+            if broad_h3 is None:
+                broad_h3 = rand.uniform(*self.GH_RANGE) if self.include_line_asymmetry else 0.0
+            if broad_h4 is None:
+                broad_h4 = rand.uniform(*self.GH_RANGE) if self.include_line_asymmetry else 0.0
 
             for _name in self.NEW_LINE_NAMES:
                 _prior = new_line_priors[_name]
@@ -706,9 +862,10 @@ class EMSpectrum(object):
             # above and _lines_to_spectrum_{numpy,torch}.
             if _use_torch_backend(backend):
                 emspec = _lines_to_spectrum_torch(self.log10wave, linecenters, norm, log10sigma,
-                                                   device=device, dtype=dtype)
+                                                   h3=narrow_h3, h4=narrow_h4, device=device, dtype=dtype)
             else:
-                emspec = _lines_to_spectrum_numpy(self.log10wave, linecenters, norm, log10sigma)
+                emspec = _lines_to_spectrum_numpy(self.log10wave, linecenters, norm, log10sigma,
+                                                   h3=narrow_h3, h4=narrow_h4)
         else:
             theseline = Table()
 
@@ -753,10 +910,11 @@ class EMSpectrum(object):
 
                 if _use_torch_backend(backend):
                     emspec_broad = _lines_to_spectrum_torch(self.log10wave, broad_centers, broad_norm,
-                                                             broadlog10sigma, device=device, dtype=dtype)
+                                                             broadlog10sigma, h3=broad_h3, h4=broad_h4,
+                                                             device=device, dtype=dtype)
                 else:
                     emspec_broad = _lines_to_spectrum_numpy(self.log10wave, broad_centers, broad_norm,
-                                                             broadlog10sigma)
+                                                             broadlog10sigma, h3=broad_h3, h4=broad_h4)
 
                 emspec = emspec + emspec_broad
 

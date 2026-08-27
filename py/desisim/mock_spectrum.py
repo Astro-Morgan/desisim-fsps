@@ -108,6 +108,7 @@ from desisim.dust import DustAttenuation
 from desisim.agn_continuum import AGNPowerLawContinuum
 from desisim.feii_continuum import FeIIPseudoContinuum
 from desisim.balmer_continuum import BalmerContinuum
+from desisim.igm_absorption import IGMAbsorption
 from desisim.decompose import combine_into_channels
 from desisim.qso_galaxy_blend import blend_qso_galaxy
 
@@ -225,7 +226,8 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
                             associated=None, associated_kwargs=None,
                             dust=None, dust_kwargs=None,
                             feii=None, feii_kwargs=None,
-                            balmer=None, balmer_kwargs=None, seed=None):
+                            balmer=None, balmer_kwargs=None,
+                            zqso=None, igm=None, igm_kwargs=None, seed=None):
     """Assemble one QSO-side additive spectrum: simqso broken power-law
     continuum + QSO-type dust attenuation + broad (AGN-like) emission +
     blueshifted associated-absorber systems + Fe II UV/optical pseudo-
@@ -282,6 +284,27 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
         balmer_kwargs (dict, optional): forwarded to balmer.spectrum()
             (e.g. T_e/log_ne/tau_BE/edge_norm/line_norm -- see
             balmer_continuum.py).
+        zqso (float, optional): QSO redshift. Default None -- skips the
+            IGM absorption channel entirely (exact previous behavior,
+            for full backward compatibility with every existing caller).
+            Unlike every other stochastic parameter in this function,
+            zqso is NOT drawn from a prior when left at its default; it
+            is a required, externally-known input the moment IGM
+            absorption is wanted at all (see igm_absorption.py's module
+            docstring, "Not rest-frame-intrinsic" section, for why this
+            channel cannot follow the usual None-means-draw convention).
+            Pass an explicit float to activate the channel.
+        igm (IGMAbsorption, optional): pre-built instance. Default None
+            builds IGMAbsorption(log10wave=np.log10(wave)) -- only
+            constructed/used at all if zqso is not None.
+        igm_kwargs (dict, optional): forwarded to igm.spectrum() (e.g.
+            add_dlas -- see igm_absorption.py). The flux this channel
+            absorbs is the full pre-IGM QSO flux (continuum_agn +
+            broad_emission + feii_flux + balmer_flux), not continuum_agn
+            alone -- see igm_absorption.py's module docstring for why a
+            fuller baseline than dust/ism/associated's own convention was
+            chosen here (the forest genuinely eats into the QSO's own
+            blue emission features, most visibly its own Lyalpha line).
         seed (int, optional): top-level seed; derives independent child
             seeds for each submodule unless overridden inside the
             respective *_kwargs dict.
@@ -298,8 +321,9 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     dust_kwargs = dict(dust_kwargs) if dust_kwargs else {}
     feii_kwargs = dict(feii_kwargs) if feii_kwargs else {}
     balmer_kwargs = dict(balmer_kwargs) if balmer_kwargs else {}
+    igm_kwargs = dict(igm_kwargs) if igm_kwargs else {}
 
-    seed_agn, seed_em, seed_associated, seed_dust, seed_feii, seed_balmer = _child_seeds(seed, 6)
+    seed_agn, seed_em, seed_associated, seed_dust, seed_feii, seed_balmer, seed_igm = _child_seeds(seed, 7)
 
     if agn is None:
         agn = AGNPowerLawContinuum()
@@ -351,16 +375,31 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     balmerflux, balmerwave, balmerparams = balmer.spectrum(**balmer_kwargs)
     balmer_flux = _harmonize(wave, balmerwave, balmerflux)
 
+    igm_flux = None
+    igmparams = None
+    if zqso is not None:
+        if igm is None:
+            igm = IGMAbsorption(log10wave=np.log10(wave))
+        igm_kwargs.setdefault('seed', seed_igm)
+        # Full pre-IGM QSO flux, not continuum_agn alone -- see
+        # igm_absorption.py's module docstring and this function's own
+        # igm_kwargs docstring for why.
+        flux_to_absorb = continuum_agn + broad_emission + feii_flux + balmer_flux
+        igmflux, igmwave, igmparams = igm.spectrum(flux_to_absorb, zqso, **igm_kwargs)
+        igm_flux = _harmonize(wave, igmwave, igmflux)
+
     out = combine_into_channels(wave, continuum_stellar=np.zeros_like(wave),
                                  continuum_agn=continuum_agn,
                                  broad_emission=broad_emission,
                                  associated_absorption_flux=associated_absorption_flux,
                                  dust_flux=dust_flux,
                                  feii_flux=feii_flux,
-                                 balmer_flux=balmer_flux)
+                                 balmer_flux=balmer_flux,
+                                 igm_flux=igm_flux)
     out['draws'] = dict(agn_slopes=slopetable, em_line_total=emline_total,
                          associated_line=assocline, dust_theta=dusttable,
-                         feii_params=feiiparams, balmer_params=balmerparams)
+                         feii_params=feiiparams, balmer_params=balmerparams,
+                         igm_params=igmparams)
     return out
 
 

@@ -114,25 +114,25 @@ DustAttenuation(include_scattered_light=True) is used. The
 generality (e.g. a future, non-dust-coupled scattering mechanism) and is
 not expected to be needed for this specific effect.
 
-BAL troughs are intentionally NOT summed by this module yet: bal.py's
-existing mechanism selects and multiplies a whole real-observed BAL
-transmission template onto the spectrum (a multiplicative correction, not
-an additive flux-deficit array), so it cannot be summed alongside the
-other additive absorption terms without first computing a residual
-(BAL-on spectrum minus BAL-off spectrum) the way simqso's own multiplicative
-emission features are reconciled to additive form (see below). Unlike an
-earlier draft of this docstring, there is no longer a separate tracked
-task to build an additive parametric BAL model -- the PI clarified
-(2026-08-06) that what had been split into "parametric/stochastic BAL"
-and "two-component dust" tasks was actually ONE thing: the stochastic
-multi-system associated-absorption model now implemented in
-associated_absorption.py (see above). BAL (broad, blended, several-
+RESOLVED (2026-08-27, task #36): bal_flux is now genuinely populated.
+bal.py's original real-template mechanism remains untouched (it multiplies
+a whole observed BAL transmission template from DESI's private
+$DESI_BASIS_TEMPLATES tree onto flux -- a multiplicative correction, not
+an additive array, and not obtainable in this project's dev environment;
+see bal_trough.py's module docstring), but per PI direction this fork
+now has its OWN from-scratch, additive, physically-parametrized BAL
+trough model: bal_trough.BALTrough (mirrors dust.py's multiplicative-to-
+additive reformulation pattern exactly, same as igm_absorption.py did for
+task #35). Its free parameters were calibrated against the real, public
+SDSS DR14Q balnicity-index (BI) distribution (Paris et al. 2018) rather
+than left as unvalidated guesses -- see bal_trough.py's module docstring
+for the full empirical-backtest writeup. BAL (broad, blended, several-
 thousand-km/s troughs) and associated absorption (narrow, discrete,
-per-system kinematics) remain physically and computationally distinct;
-bal.py's whole-template mechanism is untouched and has no currently
-planned additive replacement. A `bal_flux` keyword is provided for
-forward-compatibility but is None by default and simply omitted from the
-absorption sum if not supplied.
+per-system kinematics, associated_absorption.py) remain physically and
+computationally distinct channels, both landing in the "absorption"
+bucket via their own independently-computed arrays. The `bal_flux`
+keyword below is None by default (omitted from the sum) for callers not
+using BALTrough.
 
 --------------------------------------------------------------------------
 Note on simqso's own additive/multiplicative convention
@@ -204,11 +204,11 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
             dust-coupled case is already handled via DustAttenuation's own
             include_scattered_light flag -- see module docstring's
             "RESOLVED" note). Default: zero.
-        bal_flux (ndarray, optional): forward-compatible slot for a future
-            additive BAL channel, should one ever be built. bal.py's
-            *current* whole-template multiplicative mechanism should NOT
-            be passed here (see module docstring's BAL note). Default: zero
-            (omitted from the sum).
+        bal_flux (ndarray, optional): additive BAL trough flux deficit from
+            BALTrough.spectrum() (bal_trough.py, added 2026-08-27,
+            <=0 convention). Lands in the "absorption" bucket (see module
+            docstring). bal.py's original whole-template multiplicative
+            mechanism should NOT be passed here. Default: zero.
         feii_flux (ndarray, optional): additive Fe II UV+optical pseudo-
             continuum flux from FeIIPseudoContinuum.spectrum()
             (feii_continuum.py). Lands in the "emission" bucket (see

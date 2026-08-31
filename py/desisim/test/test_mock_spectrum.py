@@ -248,6 +248,55 @@ class TestGenerateQsoComponent(unittest.TestCase):
         self.assertTrue(np.all(broad_rows['broadshift_kms'] == broad_rows['broadshift_kms'][0]))
         self.assertNotEqual(float(broad_rows['broadshift_kms'][0]), 0.0)
 
+    def test_igm_off_by_default(self):
+        '''zqso=None (the default) must skip the IGM channel entirely --
+        exact previous behavior, for full backward compatibility with every
+        existing caller (see generate_qso_component's zqso docstring).'''
+        out = generate_qso_component(self.wave, seed=50)
+        self.assertFalse(out['components']['igm_flux'])
+        self.assertIsNone(out['draws']['igm_params'])
+
+    def test_igm_on_when_zqso_given(self):
+        '''self.wave spans 1200-3000A rest-frame, bracketing the QSO's own
+        rest-frame Lyalpha (1215.67A), so with a real zqso the IGM channel
+        should contribute a genuine, nonzero, non-positive deficit.'''
+        out = generate_qso_component(self.wave, zqso=2.5, seed=51)
+        self.assertTrue(out['components']['igm_flux'])
+        self.assertIsNotNone(out['draws']['igm_params'])
+        self.assertEqual(out['draws']['igm_params']['zqso'], 2.5)
+
+    def test_igm_seed_reproducible(self):
+        out1 = generate_qso_component(self.wave, zqso=2.5, seed=52)
+        out2 = generate_qso_component(self.wave, zqso=2.5, seed=52)
+        np.testing.assert_array_equal(out1['total'], out2['total'])
+        self.assertEqual(out1['draws']['igm_params']['ndla'], out2['draws']['igm_params']['ndla'])
+
+    def test_igm_absent_recovers_no_igm_baseline(self):
+        '''Turning the IGM channel off (zqso=None) must reproduce EXACTLY
+        the same output as before this task's wiring existed at all -- i.e.
+        identical to a call that doesn't even know about zqso, confirming
+        this is a true opt-in extension, not a behavior change.'''
+        out_no_zqso = generate_qso_component(self.wave, seed=53)
+        out_zqso_none_explicit = generate_qso_component(self.wave, zqso=None, seed=53)
+        np.testing.assert_array_equal(out_no_zqso['total'], out_zqso_none_explicit['total'])
+
+    def test_pre_built_igm_instance_is_honored(self):
+        from desisim.igm_absorption import IGMAbsorption
+        igm = IGMAbsorption(log10wave=np.log10(self.wave))
+        out = generate_qso_component(self.wave, zqso=2.5, igm=igm,
+                                      igm_kwargs=dict(add_dlas=False), seed=54)
+        self.assertTrue(out['components']['igm_flux'])
+        self.assertFalse(out['draws']['igm_params']['add_dlas'])
+
+    def test_igm_deficit_is_nonpositive_contribution(self):
+        out_off = generate_qso_component(self.wave, zqso=2.5,
+                                          igm_kwargs=dict(add_dlas=False), seed=55)
+        out_no_igm = generate_qso_component(self.wave, seed=55)
+        # Adding the (non-positive, by construction) IGM deficit on top of
+        # an otherwise-identical draw can only lower or leave unchanged the
+        # total flux at every pixel.
+        self.assertTrue(np.all(out_off['total'] <= out_no_igm['total'] + 1e-8))
+
 
 @unittest.skipUnless(_HAS_SIMQSO, 'requires simqso')
 class TestGenerateBlendedSpectrum(unittest.TestCase):

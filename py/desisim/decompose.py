@@ -81,6 +81,17 @@ implemented and tested elsewhere in this fork):
     as feii_flux: lands in the "emission" bucket despite "continuum" in
     the name, since both pieces are real emitted photons, not LOS light
     removal.
+  - igm_flux: IGMAbsorption (igm_absorption.py, added 2026-08-27) --
+    reconciles this fork's pre-existing but previously-disconnected
+    Lyman-alpha-forest (lya_mock_p1d.MockMaker) and DLA (dla.py) physics
+    into a single additive flux-deficit channel, QSO-only, requiring the
+    QSO's actual redshift (zqso) as an input since IGM absorption is not
+    a rest-frame-intrinsic property of the source (see igm_absorption.py's
+    module docstring for the full architectural discussion). Lands in the
+    "absorption" bucket alongside ism_absorption/associated_absorption_flux/
+    dust_flux, since it is, physically, the same kind of non-stellar,
+    non-dust LOS light removal. Metal-line intervening absorption is
+    explicitly deferred (see igm_absorption.py).
 
 RESOLVED (2026-08-06): the dust-scattering-into-LOS excess -- dust/
 electron scattering redirecting light back INTO the line of sight (e.g.
@@ -157,7 +168,7 @@ import numpy as np
 def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_emission=None,
                            ism_absorption=None, associated_absorption_flux=None, dust_flux=None,
                            continuum_agn=None, dust_scatter_excess=None, bal_flux=None,
-                           feii_flux=None, balmer_flux=None):
+                           feii_flux=None, balmer_flux=None, igm_flux=None):
     """Group already-generated additive channels into the PI-specified
     3-bucket decomposition (continuum / emission / absorption), plus the
     total. See module docstring for exactly what belongs in each bucket
@@ -206,6 +217,11 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
             cascade flux from BalmerContinuum.spectrum() (balmer_continuum.py).
             Lands in the "emission" bucket (see module docstring). Default:
             zero.
+        igm_flux (ndarray, optional): additive Lyman-alpha-forest + DLA
+            intervening-absorption flux deficit from
+            IGMAbsorption.spectrum() (igm_absorption.py, added
+            2026-08-27, <=0 convention). Lands in the "absorption" bucket
+            (see module docstring). Default: zero.
 
     Returns:
         dict with keys 'continuum', 'emission', 'absorption', 'total'
@@ -237,10 +253,11 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
     bal_flux_arr, has_bal = _resolve('bal_flux', bal_flux)
     feii_flux_arr, has_feii = _resolve('feii_flux', feii_flux)
     balmer_flux_arr, has_balmer = _resolve('balmer_flux', balmer_flux)
+    igm_flux_arr, has_igm = _resolve('igm_flux', igm_flux)
 
     continuum = continuum_stellar_arr + continuum_agn_arr
     emission = narrow_emission_arr + broad_emission_arr + dust_scatter_arr + feii_flux_arr + balmer_flux_arr
-    absorption = ism_absorption_arr + associated_absorption_arr + dust_flux_arr + bal_flux_arr
+    absorption = ism_absorption_arr + associated_absorption_arr + dust_flux_arr + bal_flux_arr + igm_flux_arr
     total = continuum + emission + absorption
 
     components = {
@@ -255,6 +272,7 @@ def combine_into_channels(wave, continuum_stellar, narrow_emission=None, broad_e
         'associated_absorption_flux': has_associated,
         'dust_flux': has_dust,
         'bal_flux': has_bal,
+        'igm_flux': has_igm,
     }
 
     return {

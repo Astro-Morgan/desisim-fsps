@@ -62,11 +62,13 @@ class TestEMSpectrum(unittest.TestCase):
         for vary in (False, True):
             _, _, line = self.em.spectrum(seed=1, oihbeta=0.5, siiihbeta=0.6,
                                            ariiihbeta=0.02, mgiihbeta=0.9,
+                                           mgiidoublet=1.5,
                                            vary_auxlines=vary, **self.fixed_ratios)
             self.assertAlmostEqual(self._ratio(line, '[OI]_6300'), 0.5, places=6)
             self.assertAlmostEqual(self._ratio(line, '[SIII]_9532'), 0.6, places=6)
             self.assertAlmostEqual(self._ratio(line, '[ArIII]_7135'), 0.02, places=6)
             self.assertAlmostEqual(self._ratio(line, 'MgII_2800a'), 0.9, places=6)
+            self.assertAlmostEqual(self._ratio(line, 'MgII_2800b'), 0.9 / 1.5, places=6)
 
     def test_vary_auxlines_draws_and_is_seed_reproducible(self):
         '''With vary_auxlines=True, repeated draws with different seeds
@@ -82,10 +84,11 @@ class TestEMSpectrum(unittest.TestCase):
         '''Edge case: sigma=0 in the prior must deterministically reproduce
         exp10(mean), with no scatter regardless of seed.'''
         zero_sigma_priors = {
-            'oihbeta':    dict(mean=np.log10(0.1),  sigma=0.0),
-            'siiihbeta':  dict(mean=np.log10(0.75), sigma=0.0),
-            'ariiihbeta': dict(mean=np.log10(0.04), sigma=0.0),
-            'mgiihbeta':  dict(mean=np.log10(0.3),  sigma=0.0),
+            'oihbeta':     dict(mean=np.log10(0.1),  sigma=0.0),
+            'siiihbeta':   dict(mean=np.log10(0.75), sigma=0.0),
+            'ariiihbeta':  dict(mean=np.log10(0.04), sigma=0.0),
+            'mgiihbeta':   dict(mean=np.log10(0.3),  sigma=0.0),
+            'mgiidoublet': dict(mean=np.log10(1.7),  sigma=0.0),
         }
         _, _, line1 = self.em.spectrum(seed=1, vary_auxlines=True,
                                         auxline_priors=zero_sigma_priors, **self.fixed_ratios)
@@ -93,6 +96,8 @@ class TestEMSpectrum(unittest.TestCase):
                                         auxline_priors=zero_sigma_priors, **self.fixed_ratios)
         self.assertAlmostEqual(self._ratio(line1, '[OI]_6300'), 0.1, places=6)
         self.assertAlmostEqual(self._ratio(line2, '[OI]_6300'), 0.1, places=6)
+        self.assertAlmostEqual(self._ratio(line1, 'MgII_2800b'), 0.3 / 1.7, places=6)
+        self.assertAlmostEqual(self._ratio(line2, 'MgII_2800b'), 0.3 / 1.7, places=6)
 
     def test_auxline_priors_boundary_values_do_not_error(self):
         '''Edge case: extreme (but finite) explicit ratio values, including
@@ -111,6 +116,76 @@ class TestEMSpectrum(unittest.TestCase):
                                               **self.fixed_ratios)
         self.assertEqual(len(line[line['name'] == 'MgII_2800a']), 0)
         self.assertEqual(len(line[line['name'] == 'MgII_2800b']), 0)
+
+    def test_mgiidoublet_legacy_default_is_one(self):
+        '''Task #38: with no mgiidoublet argument and vary_auxlines=False
+        (the default), MgII 2803 must equal MgII 2796 exactly (ratio=1.0),
+        reproducing the pre-task-#38 hardcoded behavior byte-for-byte.'''
+        _, _, line = self.em.spectrum(seed=1, mgiihbeta=0.9, **self.fixed_ratios)
+        self.assertAlmostEqual(self._ratio(line, 'MgII_2800a'), 0.9, places=6)
+        self.assertAlmostEqual(self._ratio(line, 'MgII_2800b'), 0.9, places=6)
+
+    def test_mgiidoublet_explicit_value_applied(self):
+        '''Task #38: an explicit mgiidoublet must set MgII2796/MgII2803
+        exactly, independent of vary_auxlines.'''
+        for vary in (False, True):
+            _, _, line = self.em.spectrum(seed=1, mgiihbeta=0.9, mgiidoublet=2.0,
+                                           vary_auxlines=vary, **self.fixed_ratios)
+            ratio_2796 = self._ratio(line, 'MgII_2800a')
+            ratio_2803 = self._ratio(line, 'MgII_2800b')
+            self.assertAlmostEqual(ratio_2796, 0.9, places=6)
+            self.assertAlmostEqual(ratio_2803, 0.9 / 2.0, places=6)
+            self.assertAlmostEqual(ratio_2796 / ratio_2803, 2.0, places=6)
+
+    def test_mgiidoublet_vary_auxlines_draws_and_is_seed_reproducible(self):
+        '''Task #38: with vary_auxlines=True and no explicit mgiidoublet,
+        the intra-doublet ratio should be seed-reproducible and differ
+        across seeds (same pattern as the other auxlines).'''
+        _, _, lineA = self.em.spectrum(seed=1, mgiihbeta=0.9, vary_auxlines=True,
+                                        **self.fixed_ratios)
+        _, _, lineB = self.em.spectrum(seed=2, mgiihbeta=0.9, vary_auxlines=True,
+                                        **self.fixed_ratios)
+        _, _, lineA2 = self.em.spectrum(seed=1, mgiihbeta=0.9, vary_auxlines=True,
+                                         **self.fixed_ratios)
+        ratioA = self._ratio(lineA, 'MgII_2800a') / self._ratio(lineA, 'MgII_2800b')
+        ratioB = self._ratio(lineB, 'MgII_2800a') / self._ratio(lineB, 'MgII_2800b')
+        ratioA2 = self._ratio(lineA2, 'MgII_2800a') / self._ratio(lineA2, 'MgII_2800b')
+        self.assertNotEqual(ratioA, ratioB)
+        self.assertAlmostEqual(ratioA, ratioA2, places=10)
+
+    def test_mgiidoublet_draw_is_centered_near_literature_median(self):
+        '''Task #38: sanity check that the vary_auxlines=True draw
+        distribution for mgiidoublet is centered close to the Henry et al.
+        (2018, ApJ 855, 96) MgII-emitter sample median of ~1.7 -- not, e.g.,
+        accidentally centered on the old hardcoded legacy value of 1.0 or
+        the intrinsic optically-thin ceiling of ~2.0 (Morton 2003, ApJS
+        149, 205). Uses many draws to make this a robust statistical check
+        rather than a single-seed coincidence.'''
+        ratios = []
+        for seed in range(200):
+            _, _, line = self.em.spectrum(seed=seed, mgiihbeta=0.9, vary_auxlines=True,
+                                           **self.fixed_ratios)
+            ratios.append(self._ratio(line, 'MgII_2800a') / self._ratio(line, 'MgII_2800b'))
+        median_ratio = float(np.median(ratios))
+        self.assertAlmostEqual(median_ratio, 1.7, delta=0.3)
+
+    def test_mgiidoublet_ignored_when_include_mgii_false(self):
+        '''mgiidoublet must have no effect and no MgII rows should appear
+        when include_mgii=False (default), matching legacy behavior.'''
+        _, _, line = self.em_nomgii.spectrum(seed=1, mgiidoublet=2.0, vary_auxlines=True,
+                                              **self.fixed_ratios)
+        self.assertEqual(len(line[line['name'] == 'MgII_2800a']), 0)
+        self.assertEqual(len(line[line['name'] == 'MgII_2800b']), 0)
+
+    def test_mgiidoublet_boundary_values_do_not_error(self):
+        '''Edge case: extreme (but finite) explicit doublet-ratio values,
+        including a value very close to zero, must not raise or produce
+        non-finite output.'''
+        for val in (1e-6, 0.3, 2.7, 10.0):
+            emspec, wave, line = self.em.spectrum(seed=1, mgiihbeta=0.9, mgiidoublet=val,
+                                                   **self.fixed_ratios)
+            self.assertTrue(np.all(np.isfinite(emspec)))
+            self.assertTrue(np.all(np.isfinite(wave)))
 
     def test_output_shape_and_no_nan(self):
         '''Smoke test: output array is well-formed regardless of

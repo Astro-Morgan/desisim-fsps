@@ -248,5 +248,86 @@ class TestFeIIPseudoContinuum(unittest.TestCase):
         self.assertTrue(np.all(flux == 0.0))
 
 
+class TestEmpiricalBacktest(unittest.TestCase):
+    '''Task #42 (retroactive audit follow-up to tasks #40/#42): confirm
+    the R_FEII_OPTICAL_BROAD_HBETA_PRIOR / LOG_FEII_OPTICAL_TO_UV_PRIOR
+    population statistics (drawn per mock by mock_spectrum.py's
+    generate_qso_component(), task #42) actually reproduce the real
+    literature values they were built from, rather than checking only
+    internal self-consistency.
+
+    Disclosed scope/limitation: since R_FEII_OPTICAL_BROAD_HBETA_PRIOR's
+    own mean/sigma were themselves DERIVED FROM these same literature
+    numbers (not independently fit), a population of draws matching them
+    is expected almost by construction for the mean; the genuinely
+    non-trivial checks here are (a) the TAIL behavior (does a real
+    fraction of the drawn population exceed R_FeII=1, matching real
+    "extreme Fe II emitter" incidence, rather than being an artificially
+    narrow distribution clustered only near the median?), and (b) a
+    regression guard (would immediately catch a sign flip, a stray
+    factor of 10, or a wrong log base introduced in a future edit).
+
+    Real reference values (read directly from the cited papers, not a
+    secondary summary):
+      - Shen & Ho (2014, Nature 513, 210, arXiv:1409.2887): R_FeII peak/
+        median ~0.6 in the SDSS quasar Eigenvector-1 plane.
+      - Panda et al. (2020, A&A 640, A42, arXiv:2001.08765), using the
+        Shen et al. (2011, ApJS 194, 45) SDSS DR7 quasar catalog with a
+        cleaned (FWHM(Hbeta)/R_FeII relative error <20%) subsample:
+        maximum observed R_FeII=6.56; ~17% (468/2734) of that same
+        cleaned subsample have R_FeII>=1 ("extreme Fe II emitters"/
+        extreme Population A).
+      - Sameshima et al. (2010, MNRAS 410, 1018, arXiv:1008.2405):
+        log10[FeII(4570)/FeII(UV)] = -0.8 +/- 0.2 dex (884 SDSS quasars).
+    '''
+
+    REAL_R_FEII_MEDIAN = 0.6
+    REAL_R_FEII_MAX_OBSERVED = 6.56
+    REAL_FRACTION_EXTREME_EMITTERS = 468.0 / 2734.0  # R_FeII >= 1
+
+    @classmethod
+    def setUpClass(cls):
+        rand = np.random.RandomState(20260901)
+        n = 5000
+        mean, sigma = (FeIIPseudoContinuum.R_FEII_OPTICAL_BROAD_HBETA_PRIOR['mean'],
+                       FeIIPseudoContinuum.R_FEII_OPTICAL_BROAD_HBETA_PRIOR['sigma'])
+        cls.r_feii_optical = 10.0 ** rand.normal(mean, sigma, n)
+        mean_uv, sigma_uv = (FeIIPseudoContinuum.LOG_FEII_OPTICAL_TO_UV_PRIOR['mean'],
+                              FeIIPseudoContinuum.LOG_FEII_OPTICAL_TO_UV_PRIOR['sigma'])
+        cls.log_optical_to_uv = rand.normal(mean_uv, sigma_uv, n)
+
+    def test_r_feii_optical_median_matches_shen_ho_2014(self):
+        self.assertAlmostEqual(float(np.median(self.r_feii_optical)),
+                                self.REAL_R_FEII_MEDIAN, delta=0.1)
+
+    def test_r_feii_optical_tail_reaches_real_observed_max_scale(self):
+        '''Not a claim that our exact max will equal 6.56 (that's a
+        single-catalog extremum, not a population parameter) -- checks
+        that the drawn population's 99.9th percentile is of the same
+        order of magnitude as the real observed maximum, i.e. the tail
+        is neither absurdly suppressed nor absurdly inflated relative to
+        real quasars.'''
+        p999 = float(np.percentile(self.r_feii_optical, 99.9))
+        self.assertGreater(p999, self.REAL_R_FEII_MAX_OBSERVED / 3.0)
+        self.assertLess(p999, self.REAL_R_FEII_MAX_OBSERVED * 3.0)
+
+    def test_fraction_of_extreme_feii_emitters_is_realistic(self):
+        '''Fraction of the drawn population with R_FeII>=1 ("extreme
+        Fe II emitters"/extreme Population A) should be broadly
+        consistent with the real ~17% incidence reported in the cleaned
+        SDSS DR7 subsample -- loose tolerance since incidence depends on
+        sample-selection details this synthetic prior cannot replicate
+        exactly.'''
+        frac = float(np.mean(self.r_feii_optical >= 1.0))
+        self.assertAlmostEqual(frac, self.REAL_FRACTION_EXTREME_EMITTERS, delta=0.10)
+
+    def test_optical_to_uv_ratio_population_matches_sameshima_2010(self):
+        self.assertAlmostEqual(float(np.mean(self.log_optical_to_uv)), -0.8, delta=0.03)
+        self.assertAlmostEqual(float(np.std(self.log_optical_to_uv)), 0.2, delta=0.03)
+
+    def test_r_feii_optical_never_negative(self):
+        self.assertTrue(np.all(self.r_feii_optical > 0.0))
+
+
 if __name__ == '__main__':
     unittest.main()

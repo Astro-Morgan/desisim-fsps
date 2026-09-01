@@ -104,6 +104,29 @@ Both pieces are real emitted photons, not line-of-sight removal, despite
 "continuum" appearing in the name of piece (A) -- same reasoning as
 feii_flux (see decompose.py). Both land in combine_into_channels'
 "emission" bucket via the single `balmer_flux` array this module returns.
+
+--------------------------------------------------------------------------
+Task #42 empirical-backtest audit: disclosed limitation
+--------------------------------------------------------------------------
+Unlike feii_continuum.py's R_FEII_OPTICAL_BROAD_HBETA_PRIOR (task #42),
+which was backtested against a real measured population distribution
+(Shen & Ho 2014; Panda et al. 2020's cleaned SDSS DR7 subsample -- see
+test_feii_continuum.py's TestEmpiricalBacktest), no equivalent
+independent, precisely-measured POPULATION distribution for either the
+Balmer-edge-to-line-series continuity condition (edge_norm's default,
+task #41) or the broad/narrow Hbeta ratio (STANDALONE_BROAD_NARROW_HBETA_RATIO
+/ mock_spectrum.HBETA_BROAD_NARROW_RATIO_RANGE) was found in the
+literature search backing tasks #41/#42. The continuity condition itself
+IS verified against real physics (Kovacevic, Popovic & Kollatschny 2015;
+see test_balmer_continuum.py's test_default_edge_norm_is_continuous_with_line_series_at_the_edge),
+and TE_RANGE/TAU_BE_RANGE are anchored on real fiducial fitting values
+(Dietrich et al. 2002, 2003; Kurk et al. 2007) -- but there is currently
+no real per-object catalog this module's ENSEMBLE output (e.g. a
+population of drawn Balmer-edge-to-broad-Hbeta flux ratios) has been
+checked against. This is honestly disclosed here rather than fabricating
+a population backtest without real reference data; a natural target for
+a future task if/when a suitable public catalog (e.g. a large
+Balmer-continuum-strength measurement sample) is identified.
 """
 
 import numpy as np

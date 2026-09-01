@@ -253,8 +253,9 @@ class TestGenerateQsoComponent(unittest.TestCase):
         ratio = out['draws']['hbeta_broad_narrow_ratio']
         self.assertAlmostEqual(out['draws']['balmer_params']['line_norm'], ratio, places=10)
 
-        expected_optical = FeIIPseudoContinuum.R_FEII_OPTICAL_BROAD_HBETA * ratio
-        expected_uv = FeIIPseudoContinuum.R_FEII_UV_BROAD_HBETA * ratio
+        expected_optical = out['draws']['r_feii_optical_broad_hbeta'] * ratio
+        log_opt_to_uv = out['draws']['log_feii_optical_to_uv']
+        expected_uv = (out['draws']['r_feii_optical_broad_hbeta'] / 10.0 ** log_opt_to_uv) * ratio
         feii_params = out['draws']['feii_params']
         fresh_feii = FeIIPseudoContinuum(log10wave=np.log10(self.wave))
         _, _, fresh_params = fresh_feii.spectrum(
@@ -284,6 +285,27 @@ class TestGenerateQsoComponent(unittest.TestCase):
         self.assertAlmostEqual(out['draws']['balmer_params']['line_norm'], 3.0, places=10)
         self.assertNotEqual(out['draws']['balmer_params']['line_norm'],
                              out['draws']['hbeta_broad_narrow_ratio'])
+
+    def test_r_feii_optical_is_drawn_and_seed_reproducible(self):
+        '''Task #42: r_feii_optical_broad_hbeta must actually vary across
+        seeds (not silently fixed) and reproduce exactly for the same
+        seed.'''
+        out_a = generate_qso_component(self.wave, seed=7)
+        out_b = generate_qso_component(self.wave, seed=8)
+        out_a2 = generate_qso_component(self.wave, seed=7)
+        self.assertNotEqual(out_a['draws']['r_feii_optical_broad_hbeta'],
+                             out_b['draws']['r_feii_optical_broad_hbeta'])
+        self.assertEqual(out_a['draws']['r_feii_optical_broad_hbeta'],
+                          out_a2['draws']['r_feii_optical_broad_hbeta'])
+
+    def test_r_feii_optical_population_median_matches_literature(self):
+        '''Task #42: across many seeds, the drawn r_feii_optical_broad_hbeta
+        population should be centered near the real literature median of
+        ~0.6 (Shen & Ho 2014) -- a statistical sanity check that the
+        prior actually got wired up correctly, not a precision test.'''
+        draws = [generate_qso_component(self.wave, seed=s)['draws']['r_feii_optical_broad_hbeta']
+                 for s in range(200)]
+        self.assertAlmostEqual(float(np.median(draws)), 0.6, delta=0.15)
 
     def test_broad_velshift_decoupled_from_narrow_by_default(self):
         '''generate_qso_component's default EMSpectrum passes

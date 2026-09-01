@@ -1131,5 +1131,73 @@ class TestTemplates(unittest.TestCase):
             if isinstance(template_factory, QSO):
                 self.assertTrue(np.all(np.isin(['TARGETID', 'PCA_COEFF'], objmeta.colnames)))
     
+class TestEmpiricalBacktestBroadLineScatter(unittest.TestCase):
+    '''Task #43 (retroactive audit follow-up to task #33): confirm the
+    NEW_LINE_PRIORS broad_sigma values for the four Vanden-Berk-anchored
+    lines (SiIV_1400, CIV_1549, CIII]_1909, MgII_2798) actually draw
+    populations whose log-ratio scatter matches the two lines for which a
+    real, citable per-object dispersion could be established, rather than
+    trusting the class comment alone.
+
+    Disclosed scope/limitation: this test can only validate MgII_2798 and
+    CIV_1549 against real numbers. CIII]_1909 and SiIV_1400 keep
+    broad_sigma=0.30 by analogy (Shen et al. 2011 does not fit those two
+    lines at all), so there is no independent real value to check them
+    against here -- see the NEW_LINE_PRIORS comment in templates.py.
+
+    Real reference values (derived directly from a live VizieR TAP query
+    against the Shen et al. (2011, ApJS 194, 45) SDSS DR7 quasar catalog,
+    N=3000 quality-cut objects, non-BAL, EW>0 -- see templates.py's task
+    #43 comment for the full methodology):
+      - MgII_2798: robust (MAD-based) sigma of log10(EW_MgII/EW_Hbeta),
+        a genuine per-object ratio since MgII and broad Hbeta DO
+        co-occur in SDSS spectra (0.35 < z < 0.89) = 0.26 dex.
+      - CIV_1549: CIV and Hbeta never co-occur in a single SDSS
+        spectrum, so this is a derived (not directly measured) estimate:
+        quadrature-sum of each line's own real standalone log-EW scatter,
+        corrected by the same factor that brings the analogous MgII
+        quadrature-sum estimate in line with its true direct value
+        (validating the correction on the one line where both routes are
+        available) = 0.28 dex.
+    '''
+
+    REAL_BROAD_SIGMA = {
+        'MgII_2798': 0.26,
+        'CIV_1549': 0.28,
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls.em = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True)
+        cls.fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
+        cls.n = 400
+        cls.log_ratio = {name: [] for name in cls.REAL_BROAD_SIGMA}
+        for seed in range(cls.n):
+            _, _, line = cls.em.spectrum(seed=seed, hbetaflux=1e-16, **cls.fixed_ratios)
+            for name in cls.REAL_BROAD_SIGMA:
+                row = line[line['name'] == name + '_broad']
+                cls.log_ratio[name].append(np.log10(float(row['ratio'][0])))
+        for name in cls.log_ratio:
+            cls.log_ratio[name] = np.array(cls.log_ratio[name])
+
+    def test_configured_broad_sigma_matches_real_value(self):
+        '''Regression guard on the literals themselves: catches any
+        future edit that silently reverts the task #43 fix back toward
+        the old uncited flat 0.30 for these two specifically-grounded
+        lines.'''
+        for name, real_sigma in self.REAL_BROAD_SIGMA.items():
+            self.assertAlmostEqual(EMSpectrum.NEW_LINE_PRIORS[name]['broad_sigma'],
+                                    real_sigma, places=6)
+
+    def test_drawn_population_scatter_matches_real_value(self):
+        '''Confirms the draw mechanism (10**rand.normal(broad_mean,
+        broad_sigma)) actually reproduces the configured sigma in the
+        log-ratio it hands to line[\'ratio\'], end to end through
+        spectrum() -- not just that the dict literal is correct.'''
+        for name, real_sigma in self.REAL_BROAD_SIGMA.items():
+            drawn_sigma = float(np.std(self.log_ratio[name]))
+            self.assertAlmostEqual(drawn_sigma, real_sigma, delta=0.05)
+
+
 if __name__ == '__main__':
     unittest.main()

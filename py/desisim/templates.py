@@ -278,6 +278,36 @@ class EMSpectrum(object):
         'siiihbeta':  dict(mean=np.log10(0.75), sigma=0.15),  # ⚠ MAGIC sigma
         'ariiihbeta': dict(mean=np.log10(0.04), sigma=0.20),  # ⚠ MAGIC sigma
         'mgiihbeta':  dict(mean=np.log10(0.3),  sigma=0.30),  # ⚠ MAGIC sigma
+        # Task #38: MgII 2796/2803 *intra-doublet* ratio (distinct from
+        # mgiihbeta above, which sets the doublet's overall strength
+        # relative to Hbeta). Unlike the four placeholder entries above,
+        # this one has a genuine empirical/theoretical anchor rather than
+        # being an unconstrained guess:
+        #   - Intrinsic (fully optically-thin) ratio = 2.013, from the
+        #     Mg II resonance-line oscillator strengths f_2796=0.6155,
+        #     f_2803=0.3058 (Morton 2003, ApJS 149, 205, Table 2).
+        #   - Real MgII EMITTERS (the physical regime this narrow-line
+        #     EMSpectrum channel represents -- P-Cygni/absorption-
+        #     dominated systems are handled separately by the additive
+        #     absorption.py MgII_2796_abs/2803_abs channel, so are out of
+        #     scope here) show resonant-scattering-suppressed ratios
+        #     below the intrinsic value: Henry et al. 2018 (ApJ 855, 96)
+        #     find a doublet-ratio range of ~0.3-2.7 with a median of
+        #     ~1.7 across 10 green-pea MgII-emitter galaxies.
+        #   - Radiative-transfer modeling (Scarlata et al. 2024, ApJ 971,
+        #     184; arXiv:2310.17908) confirms the qualitative picture:
+        #     R = F(2796)/F(2803) decreases from the intrinsic value with
+        #     increasing MgII 2803 optical depth in spherical geometries
+        #     (R ~ 2 exp(-tau_2803) in the simple escape-probability
+        #     limit), but can exceed 2 for optically-thick disk-like
+        #     geometries viewed face-on (continuum-pumped re-emission).
+        # mean is centered on the Henry et al. (2018) emitter-sample
+        # median rather than the intrinsic ceiling, since some resonant
+        # trapping is the empirically typical case for detected emitters;
+        # sigma is a ⚠ MAGIC width chosen to roughly span the quoted
+        # 0.3-2.7 observed range (real shape/covariance deferred to NPE
+        # calibration like every other AUXLINE_PRIORS entry).
+        'mgiidoublet': dict(mean=np.log10(1.7), sigma=0.25),  # ⚠ MAGIC sigma
     }
 
     # Handoff Sec 1.3 (seven lines) + task #33 (four more: SiIV_1400,
@@ -491,11 +521,25 @@ class EMSpectrum(object):
         self.oidoublet = 3.03502    # [OI] 6300/6363
         self.siiidoublet = 2.4686   # [SIII] 9532/9069
         self.ariiidoublet = 4.16988 # [ArIII] 7135/7751
-        self.mgiidoublet = 1.0      # MgII 2803/2796
+        # Unlike the five doublets above (fixed by atomic physics --
+        # Einstein-A branching ratios from a single upper level -- and
+        # therefore genuinely constant), MgII 2796/2803 is a *resonance*
+        # doublet from two separate upper levels whose emergent flux
+        # ratio is set by radiative transfer, not atomic physics alone,
+        # and is therefore a real tunable free parameter (task #38; see
+        # AUXLINE_PRIORS['mgiidoublet'] for the literature-grounded prior
+        # and range). This instance attribute is retained only as the
+        # exact pre-task-#38 legacy default/back-compat value, resolved
+        # via _resolve_auxline() in spectrum() exactly like
+        # oihbeta/siiihbeta/ariiihbeta/mgiihbeta; new code should prefer
+        # passing mgiidoublet explicitly or vary_auxlines=True over
+        # relying on this fixed placeholder.
+        self.mgiidoublet = 1.0      # MgII 2803/2796 (⚠ legacy default; see above)
 
     def spectrum(self, oiiihbeta=None, oiihbeta=None, niihbeta=None,
                  siihbeta=None, oiidoublet=0.73, siidoublet=1.3,
                  oihbeta=None, siiihbeta=None, ariiihbeta=None, mgiihbeta=None,
+                 mgiidoublet=None,
                  vary_auxlines=False, auxline_priors=None,
                  new_line_ratios=None, new_line_broad_ratios=None,
                  new_line_priors=None, broadsigma=None, broadshift_kms=None,
@@ -555,18 +599,31 @@ class EMSpectrum(object):
                 (linear). Only used if include_mgii=True was passed to
                 __init__. Same semantics as oihbeta (legacy fixed constant:
                 0.3).
+            mgiidoublet (float, optional): Desired MgII 2796/2803
+                *intra-doublet* flux ratio R=F(2796)/F(2803) (linear, not
+                log; distinct from mgiihbeta above, which sets the
+                doublet's overall strength relative to Hbeta). Only used if
+                include_mgii=True. Same None/vary_auxlines/explicit-value
+                semantics as oihbeta (legacy fixed constant: 1.0). Real MgII
+                emitters show 0.3-2.7 with median ~1.7 (Henry et al. 2018,
+                ApJ 855, 96); the intrinsic optically-thin ceiling set by
+                the 2796/2803 oscillator-strength ratio is 2.013 (Morton
+                2003, ApJS 149, 205). See AUXLINE_PRIORS['mgiidoublet'] for
+                the full literature grounding of the vary_auxlines=True
+                prior.
             vary_auxlines (bool, optional): If True, any of oihbeta,
-                siiihbeta, ariiihbeta, mgiihbeta left at their default (None)
-                are drawn independently from AUXLINE_PRIORS instead of using
-                the legacy fixed constants (default False, i.e. legacy
-                behavior: no draw, fixed constants used). This flag exists so
-                that calling spectrum() with no new arguments reproduces the
-                pre-existing behavior exactly.
+                siiihbeta, ariiihbeta, mgiihbeta, mgiidoublet left at their
+                default (None) are drawn independently from AUXLINE_PRIORS
+                instead of using the legacy fixed constants (default False,
+                i.e. legacy behavior: no draw, fixed constants used). This
+                flag exists so that calling spectrum() with no new arguments
+                reproduces the pre-existing behavior exactly.
             auxline_priors (dict, optional): Override AUXLINE_PRIORS (e.g.
                 with priors later calibrated via NPE/normalizing-flow on real
-                spectra). Must provide the same four keys with 'mean'/'sigma'
-                in log10(line/Hbeta) space. Default None uses
-                self.AUXLINE_PRIORS.
+                spectra). Must provide the same five keys with 'mean'/'sigma'
+                in log10 space (log10(line/Hbeta) for oihbeta/siiihbeta/
+                ariiihbeta/mgiihbeta; log10(F(2796)/F(2803)) for
+                mgiidoublet). Default None uses self.AUXLINE_PRIORS.
             new_line_ratios (dict, optional): Explicit narrow-component
                 line/Hbeta ratios (linear) for any of self.NEW_LINE_NAMES,
                 keyed by name (e.g. {'HeII_4686': 0.03}). Unlisted names
@@ -729,21 +786,27 @@ class EMSpectrum(object):
         # Normalize MgII
         if self.include_mgii:
             mgiihbeta = _resolve_auxline(mgiihbeta, 'mgiihbeta', 0.3)
+            # Task #38: intra-doublet ratio R=F(2796)/F(2803) is now a real
+            # tunable parameter (see AUXLINE_PRIORS['mgiidoublet'] for the
+            # literature grounding), resolved with the exact same
+            # None/vary_auxlines/explicit-value semantics as every other
+            # auxline above. self.mgiidoublet (=1.0) supplies the legacy
+            # fixed-constant value for byte-for-byte backward compatibility
+            # when vary_auxlines=False and no explicit value is passed.
+            mgiidoublet = _resolve_auxline(mgiidoublet, 'mgiidoublet', self.mgiidoublet)
 
             is2800a = np.where(line['name'] == 'MgII_2800a')[0]
             is2800b = np.where(line['name'] == 'MgII_2800b')[0]
 
             line['ratio'][is2800a] = mgiihbeta # MgII2796/Hbeta
-            # NOTE: pre-existing bug fixed here. The original code re-assigned
-            # is2800a a second time (dividing it by itself, a no-op given
-            # mgiidoublet=1.0) instead of setting is2800b, so MgII 2803 was
-            # silently left at its Column-init default ratio of 1.0 rather
-            # than being derived from the 2796 ratio. Fixed to assign
-            # is2800b as clearly intended by the comment/variable naming.
-            # Flagging per this project's "flag, don't silently resolve"
-            # convention rather than treating this as part of the tunable
-            # ratio feature itself.
-            line['ratio'][is2800b] = line['ratio'][is2800a]/self.mgiidoublet
+            # NOTE: pre-existing bug fixed here (prior to task #38). The
+            # original code re-assigned is2800a a second time (dividing it
+            # by itself, a no-op given the then-hardcoded mgiidoublet=1.0)
+            # instead of setting is2800b, so MgII 2803 was silently left at
+            # its Column-init default ratio of 1.0 rather than being
+            # derived from the 2796 ratio. Fixed to assign is2800b as
+            # clearly intended by the comment/variable naming.
+            line['ratio'][is2800b] = line['ratio'][is2800a]/mgiidoublet
         
         # Sec 1.3 + task #33: NEW_LINE_NAMES lines ([NeIII] 3869,3968;
         # [OIII] 4363; HeII 4686; [NII] 5755; [SII] 4068,4076; SiIV_1400;

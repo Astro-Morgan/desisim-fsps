@@ -108,6 +108,28 @@ from desisim.dust import DustAttenuation
 from desisim.agn_continuum import AGNPowerLawContinuum
 from desisim.feii_continuum import FeIIPseudoContinuum
 from desisim.balmer_continuum import BalmerContinuum
+
+# ⚠ MAGIC: log-uniform draw range for the broad/narrow Hbeta flux ratio
+# shared by FeIIPseudoContinuum's R_FeII-anchored defaults (task #40) and
+# BalmerContinuum's line_norm default (task #41). Drawn ONCE per QSO mock
+# HERE (not independently inside each module) and threaded into both
+# feii_kwargs/balmer_kwargs below, so the two modules always agree on the
+# same broad-Hbeta reference for a given mock -- see task #46: an earlier
+# version of tasks #40/#41 duplicated a FIXED constant independently in
+# each module, which (as flagged by the PI) would silently desynchronize
+# the two once either module started drawing it stochastically on its
+# own, undermining the R_FeII anchor's whole meaning (R_FeII is only
+# well-defined relative to THIS mock's actual broad Hbeta). No single
+# precisely-measured population distribution for this ratio was found in
+# the literature search backing tasks #40/#41 (unlike R_FeII itself);
+# (2.0, 15.0) is an order-of-magnitude bracket around the qualitative
+# evidence (narrow Hbeta widely reported as a small ~10-20% fraction of
+# total in luminous Type 1 quasars, i.e. ratio~4-9; some samples report
+# continuum+broad >=90% of Hbeta-filter flux, i.e. ratio>=9) -- flagged
+# for future replacement by a real measured distribution or, per this
+# project's standing plan, direct NPE calibration against real DESI
+# spectra rather than a hand-picked range.
+HBETA_BROAD_NARROW_RATIO_RANGE = (2.0, 15.0)
 from desisim.igm_absorption import IGMAbsorption
 from desisim.bal_trough import BALTrough
 from desisim.decompose import combine_into_channels
@@ -280,12 +302,22 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
         feii_kwargs (dict, optional): forwarded to feii.spectrum() (e.g.
             uv_params/optical_params/uv_norm/optical_norm -- see
             feii_continuum.py for the independent-UV/optical-draw
-            rationale).
+            rationale). Task #46: unless the caller already sets
+            optical_flux_hbeta/uv_flux_hbeta here, this function supplies
+            them itself, derived from a single shared
+            hbeta_broad_narrow_ratio draw (see
+            HBETA_BROAD_NARROW_RATIO_RANGE's module-level comment) that
+            is also used for balmer_kwargs['line_norm'] below -- keeping
+            Fe II's R_FeII-anchored strength and the Balmer cascade's
+            broad Hbeta mutually consistent for this mock.
         balmer (BalmerContinuum, optional): pre-built instance. Default
             None builds BalmerContinuum(log10wave=np.log10(wave)).
         balmer_kwargs (dict, optional): forwarded to balmer.spectrum()
             (e.g. T_e/log_ne/tau_BE/edge_norm/line_norm -- see
-            balmer_continuum.py).
+            balmer_continuum.py). Task #46: unless the caller already
+            sets line_norm here, this function supplies it from the same
+            shared hbeta_broad_narrow_ratio draw used for feii_kwargs
+            above.
         zqso (float, optional): QSO redshift. Default None -- skips the
             IGM absorption channel entirely (exact previous behavior,
             for full backward compatibility with every existing caller).
@@ -342,7 +374,18 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     igm_kwargs = dict(igm_kwargs) if igm_kwargs else {}
     bal_kwargs = dict(bal_kwargs) if bal_kwargs else {}
 
-    seed_agn, seed_em, seed_associated, seed_dust, seed_feii, seed_balmer, seed_igm, seed_bal = _child_seeds(seed, 8)
+    (seed_agn, seed_em, seed_associated, seed_dust, seed_feii, seed_balmer,
+     seed_igm, seed_bal, seed_hbeta_ratio) = _child_seeds(seed, 9)
+
+    # Task #46: single shared draw, threaded into both feii_kwargs and
+    # balmer_kwargs below (see HBETA_BROAD_NARROW_RATIO_RANGE's own
+    # comment above for the full rationale). Explicit per-call overrides
+    # of the relevant feii_kwargs/balmer_kwargs keys still win via
+    # setdefault(), same escape-hatch convention as every other kwarg
+    # here.
+    hbeta_broad_narrow_ratio = np.random.RandomState(seed_hbeta_ratio).uniform(
+        np.log10(HBETA_BROAD_NARROW_RATIO_RANGE[0]), np.log10(HBETA_BROAD_NARROW_RATIO_RANGE[1]))
+    hbeta_broad_narrow_ratio = 10.0 ** hbeta_broad_narrow_ratio
 
     if agn is None:
         agn = AGNPowerLawContinuum()
@@ -385,12 +428,25 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     if feii is None:
         feii = FeIIPseudoContinuum(log10wave=np.log10(wave))
     feii_kwargs.setdefault('seed', seed_feii)
+    # Task #46: use the orchestrator's shared hbeta_broad_narrow_ratio
+    # draw (not FeIIPseudoContinuum's own STANDALONE_BROAD_NARROW_HBETA_RATIO
+    # fallback) so this stays consistent with balmer_kwargs['line_norm']
+    # below. Only sets these if the caller hasn't already supplied them.
+    feii_kwargs.setdefault('optical_flux_hbeta',
+                            FeIIPseudoContinuum.R_FEII_OPTICAL_BROAD_HBETA * hbeta_broad_narrow_ratio)
+    feii_kwargs.setdefault('uv_flux_hbeta',
+                            FeIIPseudoContinuum.R_FEII_UV_BROAD_HBETA * hbeta_broad_narrow_ratio)
     feiiflux, feiiwave, feiiparams = feii.spectrum(**feii_kwargs)
     feii_flux = _harmonize(wave, feiiwave, feiiflux)
 
     if balmer is None:
         balmer = BalmerContinuum(log10wave=np.log10(wave))
     balmer_kwargs.setdefault('seed', seed_balmer)
+    # Task #46: this IS the same shared draw used for feii_kwargs above
+    # (BalmerContinuum's line_norm is, by its own docstring, literally
+    # "an effective Hbeta flux" -- exactly what hbeta_broad_narrow_ratio
+    # represents in this pipeline's narrow-Hbeta=1 unit convention).
+    balmer_kwargs.setdefault('line_norm', hbeta_broad_narrow_ratio)
     balmerflux, balmerwave, balmerparams = balmer.spectrum(**balmer_kwargs)
     balmer_flux = _harmonize(wave, balmerwave, balmerflux)
 
@@ -428,7 +484,8 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     out['draws'] = dict(agn_slopes=slopetable, em_line_total=emline_total,
                          associated_line=assocline, dust_theta=dusttable,
                          feii_params=feiiparams, balmer_params=balmerparams,
-                         igm_params=igmparams, bal_params=balparams)
+                         igm_params=igmparams, bal_params=balparams,
+                         hbeta_broad_narrow_ratio=hbeta_broad_narrow_ratio)
     return out
 
 

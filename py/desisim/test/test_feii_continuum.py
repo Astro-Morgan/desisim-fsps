@@ -183,5 +183,70 @@ class TestFeIIPseudoContinuum(unittest.TestCase):
         self.assertGreater(centroid_z, centroid0)
 
 
+    def test_explicit_norm_still_overrides_flux_hbeta(self):
+        '''Task #40 backward compatibility: an explicit uv_norm/
+        optical_norm must win over uv_flux_hbeta/optical_flux_hbeta
+        exactly as it already wins over the old implicit peak=1.0
+        default (pre-task-#40 behavior, unchanged).'''
+        flux_a, _, params_a = self.fe.spectrum(uv_norm=2.0, optical_norm=0.0,
+                                                uv_flux_hbeta=999.0, seed=1)
+        flux_b, _, params_b = self.fe.spectrum(uv_norm=2.0, optical_norm=0.0, seed=1)
+        np.testing.assert_array_equal(flux_a, flux_b)
+        self.assertAlmostEqual(params_a['uv']['norm'], 2.0, places=10)
+
+    def test_default_call_uses_literature_flux_hbeta_targets(self):
+        '''Task #40: with no norm/flux_hbeta arguments at all, the
+        integrated UV and optical band fluxes (not peak amplitudes) must
+        match DEFAULT_UV_FLUX_HBETA/DEFAULT_OPTICAL_FLUX_HBETA -- this is
+        the actual pipeline-default behavior now, replacing the old
+        arbitrary peak=1.0 placeholder (task #39 audit finding). Uses a
+        wide output grid (a superset of the native 1000-10000A grid) so
+        that np.interp's left=0/right=0 boundary clipping in spectrum()
+        doesn't itself discard band flux and bias the comparison -- that
+        clipping is real, correct, output-grid-dependent behavior (same
+        as every other module's _harmonize step elsewhere in this fork),
+        just not what this test is trying to isolate.'''
+        wide_fe = FeIIPseudoContinuum(minwave=900.0, maxwave=10500.0, cdelt_kms=40.0)
+        uv_params = dict(log_phi=19.0, log_nH=11.0, turb=0.0, sed='AGN_SED')
+        optical_params = dict(log_phi=19.0, log_nH=11.0, turb=0.0, sed='AGN_SED')
+        # Isolate each band by re-running with the other band's norm
+        # forced to zero, at the same drawn/explicit grid params.
+        uv_only, wave, _ = wide_fe.spectrum(uv_params=uv_params, optical_params=optical_params,
+                                             optical_norm=0.0, sigma_kms=1.0, velshift_kms=0.0, seed=1)
+        opt_only, _, _ = wide_fe.spectrum(uv_params=uv_params, optical_params=optical_params,
+                                           uv_norm=0.0, sigma_kms=1.0, velshift_kms=0.0, seed=1)
+        uv_integral = np.trapezoid(uv_only, wave)
+        opt_integral = np.trapezoid(opt_only, wave)
+        self.assertAlmostEqual(uv_integral, FeIIPseudoContinuum.DEFAULT_UV_FLUX_HBETA, delta=0.05)
+        self.assertAlmostEqual(opt_integral, FeIIPseudoContinuum.DEFAULT_OPTICAL_FLUX_HBETA, delta=0.02)
+
+    def test_explicit_flux_hbeta_gives_requested_integrated_flux(self):
+        '''An explicit uv_flux_hbeta/optical_flux_hbeta (with uv_norm/
+        optical_norm left at None) must produce a band whose integrated
+        flux equals the requested value, independent of the drawn grid
+        position (band shape varies, but the conversion must compensate).
+        Uses a wide output grid for the same boundary-clipping reason as
+        test_default_call_uses_literature_flux_hbeta_targets above.'''
+        wide_fe = FeIIPseudoContinuum(minwave=900.0, maxwave=10500.0, cdelt_kms=40.0)
+        for uv_params in (dict(log_phi=18.0, log_nH=10.0, turb=0.0, sed='AGN_SED'),
+                          dict(log_phi=21.0, log_nH=13.0, turb=50.0, sed='Intermediate_SED')):
+            flux, wave, params = wide_fe.spectrum(uv_params=uv_params, optical_norm=0.0,
+                                                   uv_flux_hbeta=7.5, sigma_kms=1.0,
+                                                   velshift_kms=0.0, seed=1)
+            self.assertAlmostEqual(np.trapezoid(flux, wave), 7.5, delta=0.05)
+
+    def test_flux_hbeta_scales_linearly(self):
+        wide_fe = FeIIPseudoContinuum(minwave=900.0, maxwave=10500.0, cdelt_kms=40.0)
+        common = dict(uv_params=dict(log_phi=19.0, log_nH=11.0, turb=0.0, sed='AGN_SED'),
+                      optical_norm=0.0, sigma_kms=1.0, velshift_kms=0.0, seed=1)
+        flux_a, wave, _ = wide_fe.spectrum(uv_flux_hbeta=2.0, **common)
+        flux_b, _, _ = wide_fe.spectrum(uv_flux_hbeta=6.0, **common)
+        np.testing.assert_allclose(np.trapezoid(flux_b, wave), 3.0 * np.trapezoid(flux_a, wave), rtol=1e-6)
+
+    def test_zero_flux_hbeta_gives_zero_band(self):
+        flux, wave, _ = self.fe.spectrum(uv_flux_hbeta=0.0, optical_norm=0.0, seed=1)
+        self.assertTrue(np.all(flux == 0.0))
+
+
 if __name__ == '__main__':
     unittest.main()

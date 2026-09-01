@@ -234,6 +234,57 @@ class TestGenerateQsoComponent(unittest.TestCase):
                                       balmer_kwargs=dict(edge_norm=1.0, line_norm=1.0), seed=21)
         self.assertTrue(np.all(np.isfinite(out['total'])))
 
+    def test_feii_and_balmer_share_the_same_broad_narrow_hbeta_draw(self):
+        '''Task #46: Fe II's R_FeII-anchored optical_flux_hbeta/
+        uv_flux_hbeta and Balmer's line_norm must be derived from the
+        SAME hbeta_broad_narrow_ratio draw for a given seed -- this is
+        the actual bug being fixed (each module previously carried its
+        own independent fixed constant, which would have silently
+        desynchronized the moment either drew it stochastically on its
+        own). Checked two ways: (1) balmer_params['line_norm'] must equal
+        the recorded draw exactly; (2) a fresh, independent
+        FeIIPseudoContinuum call using that SAME recorded ratio and the
+        actual resolved uv/optical grid params from feii_params must
+        reproduce the exact 'norm' values the orchestrator itself got --
+        proving feii_kwargs really received optical_flux_hbeta/
+        uv_flux_hbeta derived from this ratio, not some other value.'''
+        from desisim.feii_continuum import FeIIPseudoContinuum
+        out = generate_qso_component(self.wave, seed=42)
+        ratio = out['draws']['hbeta_broad_narrow_ratio']
+        self.assertAlmostEqual(out['draws']['balmer_params']['line_norm'], ratio, places=10)
+
+        expected_optical = FeIIPseudoContinuum.R_FEII_OPTICAL_BROAD_HBETA * ratio
+        expected_uv = FeIIPseudoContinuum.R_FEII_UV_BROAD_HBETA * ratio
+        feii_params = out['draws']['feii_params']
+        fresh_feii = FeIIPseudoContinuum(log10wave=np.log10(self.wave))
+        _, _, fresh_params = fresh_feii.spectrum(
+            uv_params={k: feii_params['uv'][k] for k in ('log_phi', 'log_nH', 'turb', 'sed')},
+            optical_params={k: feii_params['optical'][k] for k in ('log_phi', 'log_nH', 'turb', 'sed')},
+            sigma_kms=feii_params['sigma_kms'], velshift_kms=feii_params['velshift_kms'],
+            uv_flux_hbeta=expected_uv, optical_flux_hbeta=expected_optical, seed=1)
+        self.assertAlmostEqual(fresh_params['optical']['norm'], feii_params['optical']['norm'], places=6)
+        self.assertAlmostEqual(fresh_params['uv']['norm'], feii_params['uv']['norm'], places=6)
+
+    def test_hbeta_broad_narrow_ratio_within_documented_range(self):
+        from desisim.mock_spectrum import HBETA_BROAD_NARROW_RATIO_RANGE
+        for seed in range(20):
+            out = generate_qso_component(self.wave, seed=seed)
+            ratio = out['draws']['hbeta_broad_narrow_ratio']
+            self.assertGreaterEqual(ratio, HBETA_BROAD_NARROW_RATIO_RANGE[0])
+            self.assertLessEqual(ratio, HBETA_BROAD_NARROW_RATIO_RANGE[1])
+
+    def test_explicit_feii_balmer_kwargs_still_override_shared_draw(self):
+        '''An explicit optical_flux_hbeta/uv_flux_hbeta/line_norm in
+        feii_kwargs/balmer_kwargs must still win over the orchestrator's
+        shared draw (same setdefault()-based escape hatch as every other
+        kwarg in this function).'''
+        out = generate_qso_component(self.wave, seed=42,
+                                      feii_kwargs=dict(optical_flux_hbeta=9.0, uv_flux_hbeta=1.0),
+                                      balmer_kwargs=dict(line_norm=3.0))
+        self.assertAlmostEqual(out['draws']['balmer_params']['line_norm'], 3.0, places=10)
+        self.assertNotEqual(out['draws']['balmer_params']['line_norm'],
+                             out['draws']['hbeta_broad_narrow_ratio'])
+
     def test_broad_velshift_decoupled_from_narrow_by_default(self):
         '''generate_qso_component's default EMSpectrum passes
         include_broad_velshift=True (unlike EMSpectrum's own class

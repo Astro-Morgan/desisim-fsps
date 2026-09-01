@@ -224,6 +224,67 @@ class FeIIPseudoContinuum(object):
     # superset of that scale, not a fit to it.
     VELSHIFT_KMS_RANGE = (-500.0, 500.0)
 
+    # --------------------------------------------------------------------
+    # Task #40 (retroactive audit follow-up to task #31): literature-
+    # anchored default relative strengths, replacing the previous
+    # arbitrary "peak-normalized to 1.0" default norm.
+    # --------------------------------------------------------------------
+    # This pipeline's shared flux unit convention (set by EMSpectrum, see
+    # templates.py's spectrum() with hbetaflux=oiiflux=None) is
+    # "narrow Hbeta flux = 1.0". Every real literature Fe II/Hbeta ratio
+    # below (R_FeII) is conventionally measured against BROAD Hbeta (Fe II
+    # cannot be deblended from a narrow-only reference in real spectra),
+    # which in THIS fork is supplied separately by
+    # balmer_continuum.BalmerContinuum's broad H-recombination cascade
+    # (task #32), not by EMSpectrum's narrow-only Hbeta row. Converting a
+    # broad-Hbeta-relative literature ratio into this pipeline's native
+    # narrow-Hbeta=1 unit therefore requires one extra factor: the typical
+    # broad/narrow Hbeta flux ratio in luminous, broad-line-dominated
+    # ("Type 1"/Seyfert-1.0-like) quasars -- the population this fork's
+    # QSO pipeline actually targets.
+    #
+    # Task #46: this factor is NOT a fixed constant -- mock_spectrum.py's
+    # generate_qso_component() draws it ONCE per mock (see its own
+    # HBETA_BROAD_NARROW_RATIO_RANGE) and passes the resulting
+    # optical_flux_hbeta/uv_flux_hbeta into feii.spectrum() explicitly,
+    # so that this module and BalmerContinuum's line_norm always agree on
+    # the same broad-Hbeta reference for a given mock. An earlier version
+    # of this task used a plain fixed constant here, which the PI flagged
+    # as inconsistent with treating an uncertain physical quantity as a
+    # real (eventually NPE-calibrated) free parameter, and as a latent
+    # cross-module desync risk. STANDALONE_BROAD_NARROW_HBETA_RATIO below
+    # is used ONLY as this module's own zero-argument fallback when
+    # spectrum() is called directly, outside the orchestrator (e.g. in
+    # this module's own unit tests) -- it has no bearing on
+    # generate_qso_component()'s actual behavior.
+    STANDALONE_BROAD_NARROW_HBETA_RATIO = 5.0  # ⚠ MAGIC (order-of-magnitude only; see mock_spectrum.HBETA_BROAD_NARROW_RATIO_RANGE for the real per-mock draw)
+
+    # R_FeII = EW(FeII 4434-4684)/EW(Hbeta,broad), i.e. the same quantity
+    # as this module's `optical` band relative to broad Hbeta: median
+    # ~0.6 in the SDSS quasar Eigenvector-1 plane (Shen & Ho 2014, Nature
+    # 513, 210, arXiv:1409.2887), consistent with the ~0.5 mean originally
+    # reported for the Boroson & Green (1992, ApJS 80, 109) PG-quasar
+    # sample that defined Eigenvector 1.
+    R_FEII_OPTICAL_BROAD_HBETA = 0.6  # real measured population median
+
+    # FeII(lambda4570)/FeII(UV) = 10**(-0.8 +/- 0.2 dex), a precisely
+    # measured population statistic from 884 SDSS quasars (Sameshima,
+    # Kawara, Matsuoka, Oyabu, Asami & Ienaka 2010, MNRAS 410, 1018,
+    # arXiv:1008.2405, Figure 7 / Section 4.1), where FeII(UV) is
+    # integrated over 2200-3000A and FeII(4570) over 4435-4685A -- the
+    # same UV/optical bands (to within the 3500A divide documented at
+    # UV_MAXWAVE above) that this module's uv/optical pieces represent.
+    FEII_OPTICAL_TO_UV_RATIO = 10.0 ** (-0.8)  # real measured population value
+
+    # Derived: FeII(UV)/Hbeta,broad = R_FeII_optical / [FeII_optical/FeII_UV]
+    R_FEII_UV_BROAD_HBETA = R_FEII_OPTICAL_BROAD_HBETA / FEII_OPTICAL_TO_UV_RATIO
+
+    # Final defaults, converted into this pipeline's native narrow-Hbeta=1
+    # unit via STANDALONE_BROAD_NARROW_HBETA_RATIO (see its own comment above for why
+    # this last factor is the weakest link in this derivation chain).
+    DEFAULT_OPTICAL_FLUX_HBETA = R_FEII_OPTICAL_BROAD_HBETA * STANDALONE_BROAD_NARROW_HBETA_RATIO
+    DEFAULT_UV_FLUX_HBETA = R_FEII_UV_BROAD_HBETA * STANDALONE_BROAD_NARROW_HBETA_RATIO
+
     def __init__(self, minwave=1000.0, maxwave=10000.0, cdelt_kms=20.0, log10wave=None):
         """
         Args:
@@ -269,6 +330,7 @@ class FeIIPseudoContinuum(object):
         return shape
 
     def spectrum(self, uv_params=None, optical_params=None, uv_norm=None, optical_norm=None,
+                 uv_flux_hbeta=None, optical_flux_hbeta=None,
                  sigma_kms=None, velshift_kms=None, zshift=0.0, seed=None):
         """Build the additive Fe II pseudo-continuum flux array.
 
@@ -284,11 +346,34 @@ class FeIIPseudoContinuum(object):
             uv_norm, optical_norm (float, optional): multiplicative scale
                 applied to that band's peak-normalized shape (i.e. the
                 returned per-band contribution peaks at exactly this
-                value), in the caller's flux units. Default None: the
-                shape is returned peak-normalized to 1.0 (arbitrary scale,
-                same "arbitrary unless told otherwise" convention as
-                AGNPowerLawContinuum.spectrum()'s flux_norm) -- the
-                caller/NPE prior is expected to set the real strength.
+                value), in the caller's flux units. Default None: resolved
+                from uv_flux_hbeta/optical_flux_hbeta instead (see below)
+                -- an explicit uv_norm/optical_norm always overrides that
+                resolution and is applied exactly as before task #40
+                (byte-for-byte back-compatible escape hatch).
+            uv_flux_hbeta, optical_flux_hbeta (float, optional): desired
+                *integrated* band flux, as a multiple of this pipeline's
+                narrow-Hbeta=1.0 flux unit (see EMSpectrum.spectrum()'s
+                hbetaflux=None convention). Only used when the
+                corresponding uv_norm/optical_norm is None. Internally,
+                this method integrates the band's own unit-peak-
+                normalized shape (which depends on the drawn/explicit
+                uv_params/optical_params) and solves for the norm that
+                gives it the requested integrated flux -- so, unlike
+                uv_norm/optical_norm, this value means the same thing
+                regardless of the drawn grid position or broadening.
+                Default None: resolves to DEFAULT_UV_FLUX_HBETA /
+                DEFAULT_OPTICAL_FLUX_HBETA, this class's literature-
+                anchored defaults (task #40; see their own class-level
+                comments for the full derivation and citations:
+                Shen & Ho 2014; Boroson & Green 1992;
+                Sameshima et al. 2010, MNRAS 410, 1018). Pre-task-#40
+                callers that never passed uv_norm/optical_norm will see
+                their absolute output values change (the old default was
+                an uncalibrated peak=1.0 placeholder, not a deliberately
+                validated behavior -- see task #39's audit); callers that
+                explicitly passed uv_norm/optical_norm are completely
+                unaffected.
             sigma_kms (float, optional): shared macroscopic bulk velocity
                 broadening [km/s] applied to both bands via Gaussian
                 convolution. Default None: log-uniform draw from
@@ -341,8 +426,26 @@ class FeIIPseudoContinuum(object):
         uv_band = uv_band / uv_peak if uv_peak > 0 else uv_band
         opt_band = opt_band / opt_peak if opt_peak > 0 else opt_band
 
-        uv_scale = 1.0 if uv_norm is None else uv_norm
-        opt_scale = 1.0 if optical_norm is None else optical_norm
+        # Task #40: resolve uv_norm/optical_norm from the literature-
+        # anchored flux-ratio parameters when not given explicitly. Each
+        # band's unit-peak-normalized shape is integrated (trapezoidal,
+        # over the full native grid -- exactly 0 outside the band's own
+        # mask, so integrating over the whole grid is equivalent to
+        # integrating over just the band) to convert the requested
+        # *integrated flux* into the peak-amplitude norm this method has
+        # always internally applied.
+        if uv_norm is None:
+            target_uv_flux = self.DEFAULT_UV_FLUX_HBETA if uv_flux_hbeta is None else uv_flux_hbeta
+            uv_unit_integral = np.trapezoid(uv_band, native_wave)
+            uv_scale = target_uv_flux / uv_unit_integral if uv_unit_integral > 0 else 0.0
+        else:
+            uv_scale = uv_norm
+        if optical_norm is None:
+            target_opt_flux = self.DEFAULT_OPTICAL_FLUX_HBETA if optical_flux_hbeta is None else optical_flux_hbeta
+            opt_unit_integral = np.trapezoid(opt_band, native_wave)
+            opt_scale = target_opt_flux / opt_unit_integral if opt_unit_integral > 0 else 0.0
+        else:
+            opt_scale = optical_norm
         combined_native = uv_scale * uv_band + opt_scale * opt_band
 
         # Macroscopic broadening in log10-wavelength space (native grid is

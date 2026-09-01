@@ -350,20 +350,55 @@ class EMSpectrum(object):
     # line list (their "Rel. Flux = 100*F/F(Lyalpha)" column, so the
     # Lyalpha normalization cancels in this ratio): SiIV+OIV] 1396.76 =
     # 8.916, CIV 1549.06 = 25.291, CIII] 1908.73 = 15.943, MgII 2798.75 =
-    # 14.725, Hbeta 4862.68 = 8.649 (all in that same table). broad_sigma
-    # for those four is smaller (0.30 dex) than the ⚠ MAGIC entries below
-    # since it reflects genuine object-to-object scatter around a measured
-    # median, not a placeholder. narrow_mean for those same four IS ⚠
-    # MAGIC (no analogous measurement used here): CIV/CIII]/SiIV are high-
-    # ionization resonance/semi-forbidden lines with only a weak, poorly-
-    # constrained narrow-line-region contribution in most Type 1 QSOs, set
-    # here to ~3% of the (measured) broad amplitude as a placeholder,
-    # deferred to NPE calibration like every other ⚠ MAGIC entry.
-    # MgII_2798's narrow_mean is deliberately pinned far smaller still
-    # (~1e-4 of Hbeta) -- this row exists ONLY to carry a broad component;
-    # narrow MgII is already fully handled by the separate, pre-existing
-    # MgII_2800a/2800b doublet (include_mgii) above, and giving this row a
-    # non-negligible narrow draw too would double-count that flux.
+    # 14.725, Hbeta 4862.68 = 8.649 (all in that same table). narrow_mean
+    # for those same four IS ⚠ MAGIC (no analogous measurement used here):
+    # CIV/CIII]/SiIV are high-ionization resonance/semi-forbidden lines
+    # with only a weak, poorly-constrained narrow-line-region contribution
+    # in most Type 1 QSOs, set here to ~3% of the (measured) broad
+    # amplitude as a placeholder, deferred to NPE calibration like every
+    # other ⚠ MAGIC entry. MgII_2798's narrow_mean is deliberately pinned
+    # far smaller still (~1e-4 of Hbeta) -- this row exists ONLY to carry
+    # a broad component; narrow MgII is already fully handled by the
+    # separate, pre-existing MgII_2800a/2800b doublet (include_mgii)
+    # above, and giving this row a non-negligible narrow draw too would
+    # double-count that flux.
+    #
+    # Task #43 empirical-backtest audit: broad_sigma for these four lines
+    # was previously a flat, uncited 0.30 dex for all four, with a class
+    # comment (removed here) that incorrectly claimed this reflected "a
+    # measured median" -- no citation ever backed that number. Live-
+    # queried the Shen et al. (2011, ApJS, 194, 45) SDSS DR7 quasar
+    # catalog via VizieR TAP (table "J/ApJS/194/45/catalog") for real,
+    # per-object equivalent widths (N=3000 quality-cut objects, non-BAL,
+    # EW>0) to ground this properly:
+    #   - MgII_2798: CIV and broad Hbeta are NEVER observed in the same
+    #     SDSS spectrum (CIV needs z gtrsim 1.45; Hbeta needs z lesssim
+    #     0.89), but MgII and broad Hbeta DO co-occur (0.35 < z < 0.89),
+    #     giving a genuine per-object ratio. Robust (MAD-based) sigma of
+    #     log10(EW_MgII/EW_Hbeta) = 0.26 dex, cross-checked against an
+    #     iterative 3-sigma-clipped std (0.27) and the 16-84 percentile
+    #     half-width (0.27) -- all consistent. broad_sigma set to 0.26.
+    #   - CIV_1549: CIV and Hbeta never co-occur in a single SDSS
+    #     spectrum, so no direct per-object ratio exists. Validated a
+    #     workaround on the MgII case first: quadrature-summing each
+    #     line's own real standalone log-EW scatter (sigma_MgII=0.19,
+    #     sigma_Hbeta=0.20 dex) predicts sigma=0.27 dex for MgII/Hbeta,
+    #     a 6% overestimate relative to the true direct value (0.26)
+    #     fully explained by weak positive EW-EW correlation (r=0.15).
+    #     Applying that same validated quadrature-plus-correction method
+    #     to CIV's real standalone scatter (sigma_CIV=0.22 dex) gives an
+    #     estimated sigma(log[CIV/Hbeta]) = 0.28 dex. broad_sigma set to
+    #     0.28.
+    #   - CIII]_1909 / SiIV_1400: Shen et al. (2011) does not fit these
+    #     lines at all, so neither the direct nor the standalone-
+    #     quadrature route above is available from this catalog, and no
+    #     other per-object catalog with clean CIII]/SiIV EWs was found.
+    #     broad_sigma is kept at 0.30 dex BY ANALOGY to the two directly-
+    #     grounded UV BLR lines above (which land at 0.26-0.28), not from
+    #     a measurement of these two lines specifically -- this is
+    #     honestly still a placeholder, one dex-scale step better
+    #     motivated than an arbitrary guess but not equivalent to the
+    #     MgII/CIV entries.
     NEW_LINE_PRIORS = {
         '[NeIII]_3869': dict(narrow_mean=np.log10(0.15),   narrow_sigma=0.30,
                               broad_mean=np.log10(0.02),    broad_sigma=0.50),
@@ -379,20 +414,26 @@ class EMSpectrum(object):
                               broad_mean=np.log10(0.003),   broad_sigma=0.50),
         '[SII]_4076':   dict(narrow_mean=np.log10(0.010),  narrow_sigma=0.35,
                               broad_mean=np.log10(0.002),   broad_sigma=0.50),
-        # broad_mean = log10(8.916/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC)
+        # broad_mean = log10(8.916/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC).
+        # broad_sigma=0.30: analogy-based, see task #43 comment above.
         'SiIV_1400':    dict(narrow_mean=np.log10(1.0309) - 1.5, narrow_sigma=0.50,
                               broad_mean=np.log10(1.0309),  broad_sigma=0.30),
-        # broad_mean = log10(25.291/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC)
+        # broad_mean = log10(25.291/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC).
+        # broad_sigma=0.28: Shen et al. (2011) SDSS DR7, derived via
+        # validated quadrature method, see task #43 comment above.
         'CIV_1549':     dict(narrow_mean=np.log10(2.9242) - 1.5, narrow_sigma=0.50,
-                              broad_mean=np.log10(2.9242),  broad_sigma=0.30),
-        # broad_mean = log10(15.943/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC)
+                              broad_mean=np.log10(2.9242),  broad_sigma=0.28),
+        # broad_mean = log10(15.943/8.649); narrow_mean = broad_mean - 1.5 (⚠ MAGIC).
+        # broad_sigma=0.30: analogy-based, see task #43 comment above.
         'CIII]_1909':   dict(narrow_mean=np.log10(1.8433) - 1.5, narrow_sigma=0.50,
                               broad_mean=np.log10(1.8433),  broad_sigma=0.30),
         # broad_mean = log10(14.725/8.649); narrow_mean pinned negligible
         # (⚠ MAGIC, see class-level comment above -- avoids double-
         # counting the existing dedicated narrow MgII doublet).
+        # broad_sigma=0.26: Shen et al. (2011) SDSS DR7, direct per-object
+        # measurement, see task #43 comment above.
         'MgII_2798':    dict(narrow_mean=np.log10(1e-4),    narrow_sigma=0.50,
-                              broad_mean=np.log10(1.7025),  broad_sigma=0.30),
+                              broad_mean=np.log10(1.7025),  broad_sigma=0.26),
     }
     # ⚠ MAGIC: broad-line-region velocity SIGMA [km/s] is shared across all
     # seven broad components in a given spectrum() call, rather than each

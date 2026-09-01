@@ -260,30 +260,62 @@ class FeIIPseudoContinuum(object):
     STANDALONE_BROAD_NARROW_HBETA_RATIO = 5.0  # ⚠ MAGIC (order-of-magnitude only; see mock_spectrum.HBETA_BROAD_NARROW_RATIO_RANGE for the real per-mock draw)
 
     # R_FeII = EW(FeII 4434-4684)/EW(Hbeta,broad), i.e. the same quantity
-    # as this module's `optical` band relative to broad Hbeta: median
-    # ~0.6 in the SDSS quasar Eigenvector-1 plane (Shen & Ho 2014, Nature
-    # 513, 210, arXiv:1409.2887), consistent with the ~0.5 mean originally
-    # reported for the Boroson & Green (1992, ApJS 80, 109) PG-quasar
-    # sample that defined Eigenvector 1.
-    R_FEII_OPTICAL_BROAD_HBETA = 0.6  # real measured population median
+    # as this module's `optical` band relative to broad Hbeta. Real
+    # quasars show a broad, right-skewed distribution of this quantity,
+    # NOT a single fixed value -- Eigenvector 1 (Boroson & Green 1992,
+    # ApJS 80, 109) is fundamentally a statement about R_FeII's spread
+    # across the quasar population, and Shen & Ho (2014, Nature 513, 210,
+    # arXiv:1409.2887) report a peak/mode of ~0.6 in the SDSS Eigenvector-
+    # 1 plane, while Marziani et al.-type cleaned SDSS DR7 subsamples
+    # (Panda et al. 2020, arXiv:2001.08765, using the Shen et al. 2011
+    # DR7 quasar catalog) report values ranging up to R_FeII=6.56 in the
+    # same population. Task #42 (retroactive audit follow-up to task
+    # #40): this is therefore drawn per mock (lognormal in R_FeII, i.e.
+    # log10(R_FeII) ~ Normal(mean, sigma)) rather than fixed at its
+    # median -- see mock_spectrum.py's generate_qso_component(), which
+    # owns this draw (same "orchestrator draws, module consumes the
+    # resolved flux target" split as HBETA_BROAD_NARROW_RATIO_RANGE,
+    # task #46). mean is the real measured median; sigma is a ⚠ MAGIC
+    # width tuned (by direct numerical check, not an analytic formula --
+    # a single lognormal cannot match both real constraints exactly) to
+    # jointly give a reasonable simultaneous match to two independent
+    # real statistics from the SAME Panda et al. (2020) cleaned DR7
+    # subsample: (a) ~17% (468/2734) of real quasars have R_FeII>=1
+    # ("extreme Fe II emitters"), and (b) the maximum R_FeII observed in
+    # that same n=2734 subsample is 6.56 (expected around the 99.96th
+    # percentile of a sample that size). sigma=0.24 alone matches (a)
+    # almost exactly but undershoots (b) by ~2x; sigma=0.31 alone matches
+    # (b) but overshoots (a) to ~24%; sigma=0.28 (adopted here) gives
+    # ~22% for (a) and ~5.0 for (b) -- both within a factor of ~1.3-1.5
+    # of the real values, a reasonable compromise given a single
+    # lognormal is only an approximate model of what is likely a
+    # somewhat heavier-tailed real distribution. Deferred to NPE
+    # calibration (a real non-lognormal shape, learned directly from
+    # data) like every other ⚠ MAGIC width in this fork.
+    R_FEII_OPTICAL_BROAD_HBETA_PRIOR = dict(mean=np.log10(0.6), sigma=0.28)  # ⚠ MAGIC sigma; real mean
 
-    # FeII(lambda4570)/FeII(UV) = 10**(-0.8 +/- 0.2 dex), a precisely
-    # measured population statistic from 884 SDSS quasars (Sameshima,
-    # Kawara, Matsuoka, Oyabu, Asami & Ienaka 2010, MNRAS 410, 1018,
-    # arXiv:1008.2405, Figure 7 / Section 4.1), where FeII(UV) is
-    # integrated over 2200-3000A and FeII(4570) over 4435-4685A -- the
-    # same UV/optical bands (to within the 3500A divide documented at
-    # UV_MAXWAVE above) that this module's uv/optical pieces represent.
-    FEII_OPTICAL_TO_UV_RATIO = 10.0 ** (-0.8)  # real measured population value
+    # FeII(lambda4570)/FeII(UV) = 10**(-0.8 +/- 0.2 dex): mean AND sigma
+    # are BOTH precisely measured population statistics from 884 SDSS
+    # quasars (Sameshima, Kawara, Matsuoka, Oyabu, Asami & Ienaka 2010,
+    # MNRAS 410, 1018, arXiv:1008.2405, Figure 7 / Section 4.1 -- "the
+    # average of log FeII(4570)/FeII(UV) is -0.8 and the standard
+    # deviation is 0.2 dex"), where FeII(UV) is integrated over
+    # 2200-3000A and FeII(4570) over 4435-4685A -- the same UV/optical
+    # bands (to within the 3500A divide documented at UV_MAXWAVE above)
+    # that this module's uv/optical pieces represent. Unlike every other
+    # sigma in this module, this one is NOT a MAGIC guess.
+    LOG_FEII_OPTICAL_TO_UV_PRIOR = dict(mean=-0.8, sigma=0.2)  # real measured mean AND sigma
 
-    # Derived: FeII(UV)/Hbeta,broad = R_FeII_optical / [FeII_optical/FeII_UV]
-    R_FEII_UV_BROAD_HBETA = R_FEII_OPTICAL_BROAD_HBETA / FEII_OPTICAL_TO_UV_RATIO
-
-    # Final defaults, converted into this pipeline's native narrow-Hbeta=1
-    # unit via STANDALONE_BROAD_NARROW_HBETA_RATIO (see its own comment above for why
-    # this last factor is the weakest link in this derivation chain).
-    DEFAULT_OPTICAL_FLUX_HBETA = R_FEII_OPTICAL_BROAD_HBETA * STANDALONE_BROAD_NARROW_HBETA_RATIO
-    DEFAULT_UV_FLUX_HBETA = R_FEII_UV_BROAD_HBETA * STANDALONE_BROAD_NARROW_HBETA_RATIO
+    # Point-value fallbacks for this module's OWN zero-argument default
+    # (spectrum() called directly, outside the orchestrator -- see
+    # STANDALONE_BROAD_NARROW_HBETA_RATIO's comment above for the
+    # identical convention). Uses each prior's mean (median), i.e. no
+    # scatter -- the orchestrator is what actually draws these per mock.
+    DEFAULT_OPTICAL_FLUX_HBETA = (10.0 ** R_FEII_OPTICAL_BROAD_HBETA_PRIOR['mean']
+                                   * STANDALONE_BROAD_NARROW_HBETA_RATIO)
+    DEFAULT_UV_FLUX_HBETA = (10.0 ** R_FEII_OPTICAL_BROAD_HBETA_PRIOR['mean']
+                              / 10.0 ** LOG_FEII_OPTICAL_TO_UV_PRIOR['mean']
+                              * STANDALONE_BROAD_NARROW_HBETA_RATIO)
 
     def __init__(self, minwave=1000.0, maxwave=10000.0, cdelt_kms=20.0, log10wave=None):
         """

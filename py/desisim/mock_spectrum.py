@@ -304,8 +304,10 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
             feii_continuum.py for the independent-UV/optical-draw
             rationale). Task #46: unless the caller already sets
             optical_flux_hbeta/uv_flux_hbeta here, this function supplies
-            them itself, derived from a single shared
-            hbeta_broad_narrow_ratio draw (see
+            them itself, as r_feii_optical_broad_hbeta/
+            r_feii_uv_broad_hbeta (each independently drawn per mock from
+            FeIIPseudoContinuum's own literature-anchored priors -- task
+            #42) times a single shared hbeta_broad_narrow_ratio draw (see
             HBETA_BROAD_NARROW_RATIO_RANGE's module-level comment) that
             is also used for balmer_kwargs['line_norm'] below -- keeping
             Fe II's R_FeII-anchored strength and the Balmer cascade's
@@ -375,7 +377,8 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     bal_kwargs = dict(bal_kwargs) if bal_kwargs else {}
 
     (seed_agn, seed_em, seed_associated, seed_dust, seed_feii, seed_balmer,
-     seed_igm, seed_bal, seed_hbeta_ratio) = _child_seeds(seed, 9)
+     seed_igm, seed_bal, seed_hbeta_ratio, seed_rfeii_optical,
+     seed_feii_opt_to_uv) = _child_seeds(seed, 11)
 
     # Task #46: single shared draw, threaded into both feii_kwargs and
     # balmer_kwargs below (see HBETA_BROAD_NARROW_RATIO_RANGE's own
@@ -386,6 +389,24 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     hbeta_broad_narrow_ratio = np.random.RandomState(seed_hbeta_ratio).uniform(
         np.log10(HBETA_BROAD_NARROW_RATIO_RANGE[0]), np.log10(HBETA_BROAD_NARROW_RATIO_RANGE[1]))
     hbeta_broad_narrow_ratio = 10.0 ** hbeta_broad_narrow_ratio
+
+    # Task #42: R_FeII (optical Fe II/broad-Hbeta) and the FeII(optical)/
+    # FeII(UV) ratio are now drawn per mock from FeIIPseudoContinuum's own
+    # literature-anchored priors (see R_FEII_OPTICAL_BROAD_HBETA_PRIOR/
+    # LOG_FEII_OPTICAL_TO_UV_PRIOR there), rather than each being fixed at
+    # its own median -- real quasars show broad Eigenvector-1 scatter in
+    # R_FeII, not a single value. Drawn HERE (not inside
+    # FeIIPseudoContinuum.spectrum() itself) so the derived
+    # optical_flux_hbeta/uv_flux_hbeta passed to feii_kwargs below can
+    # still be combined with the SAME shared hbeta_broad_narrow_ratio
+    # used for balmer_kwargs['line_norm'].
+    r_feii_optical_broad_hbeta = 10.0 ** np.random.RandomState(seed_rfeii_optical).normal(
+        FeIIPseudoContinuum.R_FEII_OPTICAL_BROAD_HBETA_PRIOR['mean'],
+        FeIIPseudoContinuum.R_FEII_OPTICAL_BROAD_HBETA_PRIOR['sigma'])
+    log_feii_optical_to_uv = np.random.RandomState(seed_feii_opt_to_uv).normal(
+        FeIIPseudoContinuum.LOG_FEII_OPTICAL_TO_UV_PRIOR['mean'],
+        FeIIPseudoContinuum.LOG_FEII_OPTICAL_TO_UV_PRIOR['sigma'])
+    r_feii_uv_broad_hbeta = r_feii_optical_broad_hbeta / 10.0 ** log_feii_optical_to_uv
 
     if agn is None:
         agn = AGNPowerLawContinuum()
@@ -433,9 +454,9 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     # fallback) so this stays consistent with balmer_kwargs['line_norm']
     # below. Only sets these if the caller hasn't already supplied them.
     feii_kwargs.setdefault('optical_flux_hbeta',
-                            FeIIPseudoContinuum.R_FEII_OPTICAL_BROAD_HBETA * hbeta_broad_narrow_ratio)
+                            r_feii_optical_broad_hbeta * hbeta_broad_narrow_ratio)
     feii_kwargs.setdefault('uv_flux_hbeta',
-                            FeIIPseudoContinuum.R_FEII_UV_BROAD_HBETA * hbeta_broad_narrow_ratio)
+                            r_feii_uv_broad_hbeta * hbeta_broad_narrow_ratio)
     feiiflux, feiiwave, feiiparams = feii.spectrum(**feii_kwargs)
     feii_flux = _harmonize(wave, feiiwave, feiiflux)
 
@@ -485,7 +506,9 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
                          associated_line=assocline, dust_theta=dusttable,
                          feii_params=feiiparams, balmer_params=balmerparams,
                          igm_params=igmparams, bal_params=balparams,
-                         hbeta_broad_narrow_ratio=hbeta_broad_narrow_ratio)
+                         hbeta_broad_narrow_ratio=hbeta_broad_narrow_ratio,
+                         r_feii_optical_broad_hbeta=r_feii_optical_broad_hbeta,
+                         log_feii_optical_to_uv=log_feii_optical_to_uv)
     return out
 
 

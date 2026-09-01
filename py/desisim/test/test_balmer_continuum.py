@@ -222,5 +222,63 @@ class TestBalmerContinuum(unittest.TestCase):
         np.testing.assert_allclose(f_numpy, f_torch, atol=1e-20, rtol=1e-6)
 
 
+    def test_explicit_edge_norm_still_overrides_default(self):
+        '''Task #41 backward compatibility: an explicit edge_norm must
+        win over the new continuity-condition default exactly as it
+        already won over the old implicit peak=1.0 default.'''
+        flux_a, _, params_a = self.bc.spectrum(edge_norm=3.0, line_norm=1.0, T_e=15000.0,
+                                                log_ne=10.0, tau_BE=1.0, seed=1, backend='numpy')
+        flux_b, _, params_b = self.bc.spectrum(edge_norm=3.0, line_norm=1.0, T_e=15000.0,
+                                                log_ne=10.0, tau_BE=1.0, seed=1, backend='numpy')
+        np.testing.assert_array_equal(flux_a, flux_b)
+        self.assertAlmostEqual(params_a['edge_norm'], 3.0, places=10)
+
+    def test_default_line_norm_is_broad_narrow_hbeta_ratio(self):
+        '''Task #41: with line_norm=None, the resolved value recorded in
+        params must equal the new literature-anchored default, not the
+        old placeholder of 1.0.'''
+        _, _, params = self.bc.spectrum(edge_norm=0.0, T_e=15000.0, log_ne=10.0, tau_BE=1.0,
+                                         seed=1, backend='numpy')
+        self.assertAlmostEqual(params['line_norm'], BalmerContinuum.BROAD_NARROW_HBETA_RATIO, places=10)
+        self.assertNotEqual(params['line_norm'], 1.0)
+
+    def test_default_edge_norm_is_continuous_with_line_series_at_the_edge(self):
+        '''Task #41: with edge_norm=None, the free-bound edge piece and
+        the high-order line series must be continuous at lambda=3646A
+        (Kovacevic, Popovic & Kollatschny 2015 continuity condition) --
+        checked directly on the two pieces' own analytic/interpolated
+        values at that wavelength, at zero velocity shift so the "shifted"
+        and "rest-frame" edge wavelengths coincide exactly.'''
+        from desisim.balmer_continuum import _planck_lambda, _bilinear_ratio
+        T_e, log_ne, tau_BE = 15000.0, 10.0, 1.0
+        flux, wave, params = self.bc.spectrum(T_e=T_e, log_ne=log_ne, tau_BE=tau_BE,
+                                               line_norm=2.5, velshift_kms=0.0, zshift=0.0,
+                                               seed=1, backend='numpy')
+        edge_scale = params['edge_norm']
+        edge_peak = np.where(wave <= BalmerContinuum.LAMBDA_BE,
+                              _planck_lambda(wave, T_e) * (1.0 - np.exp(-tau_BE * (wave / BalmerContinuum.LAMBDA_BE) ** 3)),
+                              0.0).max()
+        edge_raw_at_edge = _planck_lambda(BalmerContinuum.LAMBDA_BE, T_e) * (1.0 - np.exp(-tau_BE))
+        edge_value_at_edge = edge_scale * edge_raw_at_edge / edge_peak
+
+        line_only, _, _ = self.bc.spectrum(T_e=T_e, log_ne=log_ne, tau_BE=tau_BE, edge_norm=0.0,
+                                            line_norm=2.5, velshift_kms=0.0, zshift=0.0,
+                                            seed=1, backend='numpy')
+        line_value_at_edge = np.interp(BalmerContinuum.LAMBDA_BE, wave, line_only)
+
+        self.assertAlmostEqual(edge_value_at_edge, line_value_at_edge, delta=1e-6)
+
+    def test_default_edge_norm_tracks_explicit_line_norm(self):
+        '''The continuity default must respond to whatever line_norm is
+        actually in effect, not just its own literature default -- i.e.
+        scaling line_norm up should scale the derived edge_norm up by the
+        same factor.'''
+        _, _, params_a = self.bc.spectrum(T_e=15000.0, log_ne=10.0, tau_BE=1.0, line_norm=1.0,
+                                           seed=1, backend='numpy')
+        _, _, params_b = self.bc.spectrum(T_e=15000.0, log_ne=10.0, tau_BE=1.0, line_norm=4.0,
+                                           seed=1, backend='numpy')
+        self.assertAlmostEqual(params_b['edge_norm'] / params_a['edge_norm'], 4.0, places=6)
+
+
 if __name__ == '__main__':
     unittest.main()

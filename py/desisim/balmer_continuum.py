@@ -216,6 +216,22 @@ class BalmerContinuum(object):
     SIGMA_KMS_RANGE = (425.0, 4250.0)
     VELSHIFT_KMS_RANGE = (-1000.0, 200.0)
 
+    # --------------------------------------------------------------------
+    # Task #41 (retroactive audit follow-up to task #32): literature-
+    # anchored default for line_norm, replacing the previous arbitrary
+    # "effective Hbeta flux of 1.0" default -- see feii_continuum.py's
+    # BROAD_NARROW_HBETA_RATIO (task #40) for the identical derivation;
+    # duplicated here rather than imported for the same module-self-
+    # containment reasons _bracket() is duplicated rather than imported
+    # (see this module's own docstring). This is this module's own
+    # broad-Hbeta-equivalent line's flux, in this pipeline's native
+    # narrow-Hbeta=1 unit (see EMSpectrum.spectrum()'s hbetaflux=None
+    # convention) -- i.e. line_norm=BROAD_NARROW_HBETA_RATIO means "this
+    # cascade's broad Hbeta is BROAD_NARROW_HBETA_RATIO times EMSpectrum's
+    # narrow Hbeta," matching this module's own docstring description of
+    # line_norm as "an effective Hbeta flux."
+    BROAD_NARROW_HBETA_RATIO = 5.0  # ⚠ MAGIC (order-of-magnitude only)
+
     def __init__(self, minwave=1000.0, maxwave=10000.0, cdelt_kms=20.0, log10wave=None):
         """
         Args:
@@ -251,15 +267,40 @@ class BalmerContinuum(object):
             edge_norm (float, optional): multiplicative scale applied to
                 the free-bound edge's peak-normalized shape (i.e. piece
                 (A) peaks at exactly this value), in the caller's flux
-                units. Default None: shape is peak-normalized to 1.0
-                (arbitrary scale, same convention as
-                AGNPowerLawContinuum.spectrum()'s flux_norm and
-                FeIIPseudoContinuum's uv_norm/optical_norm).
+                units. Default None (task #41): rather than an arbitrary
+                placeholder, resolved so that piece (A) is continuous
+                with piece (B) at the Balmer edge itself (lambda=3646A) --
+                i.e. the free-bound edge flux exactly matches the summed
+                flux of the high-order line series at that wavelength,
+                using whatever line_norm/line_scale is in effect. This is
+                not a free literature ratio but a physical continuity
+                condition: Kovacevic, Popovic & Kollatschny (2015,
+                arXiv:1311.6653) show that the sum of high-order
+                (n up to 400) Balmer lines at the edge reproduces the
+                Grandi (1982) free-bound edge intensity there (their
+                Eq. 5/7), for the same (T_e, tau_BE)=(15000K, 1) fiducial
+                values this module's own TE_RANGE/TAU_BE_RANGE already
+                bracket -- so this default holds regardless of whether
+                line_norm was itself explicitly passed or left at its own
+                literature default (see line_norm below). An explicit
+                edge_norm always overrides this and is applied exactly as
+                before task #41 (byte-for-byte back-compatible escape
+                hatch).
             line_norm (float, optional): multiplicative scale applied to
                 the Hbeta-relative case-B ratios (i.e. an
                 "effective Hbeta flux" for this cascade -- a line with
-                ratio=1 would have flux exactly line_norm). Default None:
-                1.0.
+                ratio=1 would have flux exactly line_norm). Default None
+                (task #41): resolves to BROAD_NARROW_HBETA_RATIO (see its
+                own class-level comment for the derivation and caveats;
+                same order-of-magnitude anchor as
+                feii_continuum.FeIIPseudoContinuum.BROAD_NARROW_HBETA_RATIO
+                from task #40), replacing the previous uncalibrated
+                default of 1.0 (task #39's audit finding: 1.0 implied
+                broad Hbeta = narrow Hbeta, understating real Type 1
+                quasars' broad-line dominance). Pre-task-#41 callers that
+                never passed edge_norm/line_norm will see their absolute
+                output values change; callers that explicitly passed them
+                are completely unaffected.
             sigma_kms (float, optional): shared macroscopic BLR velocity
                 width [km/s] applied to both pieces. Default None:
                 log-uniform draw from SIGMA_KMS_RANGE.
@@ -295,23 +336,15 @@ class BalmerContinuum(object):
         if velshift_kms is None:
             velshift_kms = rand.uniform(*self.VELSHIFT_KMS_RANGE)
 
-        edge_scale = 1.0 if edge_norm is None else edge_norm
-        line_scale = 1.0 if line_norm is None else line_norm
+        # Task #41: line_norm resolved first (before edge_norm), since
+        # edge_norm's own new default depends on the fully-resolved line
+        # series (see edge_norm's docstring above for the physical
+        # continuity condition this implements).
+        line_scale = self.BROAD_NARROW_HBETA_RATIO if line_norm is None else line_norm
 
         wave_out = 10 ** self.log10wave
 
-        # --- (A) free-bound edge (Grandi 1982), built directly on the
-        # output grid, then shifted (interpolated) by velshift_kms+zshift.
-        edge_shape = np.where(
-            wave_out <= self.LAMBDA_BE,
-            _planck_lambda(wave_out, T_e) * (1.0 - np.exp(-tau_BE * (wave_out / self.LAMBDA_BE) ** 3)),
-            0.0)
-        edge_peak = edge_shape.max()
-        edge_shape = edge_shape / edge_peak if edge_peak > 0 else edge_shape
-        edge_native_wave = wave_out * (1.0 + zshift) * (1.0 + velshift_kms / C_LIGHT)
-        edge_flux = edge_scale * np.interp(wave_out, edge_native_wave, edge_shape, left=0.0, right=0.0)
-
-        # --- (B) bound-bound merged line series ---
+        # --- (B) bound-bound merged line series (computed first; see above) ---
         g = self._grid
         ratios = _bilinear_ratio(g['ratio'], g['dens_grid'], g['temp_grid'], log_ne, T_e)
         amp = line_scale * ratios
@@ -326,6 +359,34 @@ class BalmerContinuum(object):
                                                   device=device, dtype=dtype)
         else:
             line_flux = _lines_to_spectrum_numpy(self.log10wave, linecenters, norm, log10sigma)
+
+        # --- (A) free-bound edge (Grandi 1982), built directly on the
+        # output grid, then shifted (interpolated) by velshift_kms+zshift.
+        edge_shape = np.where(
+            wave_out <= self.LAMBDA_BE,
+            _planck_lambda(wave_out, T_e) * (1.0 - np.exp(-tau_BE * (wave_out / self.LAMBDA_BE) ** 3)),
+            0.0)
+        edge_peak = edge_shape.max()
+        edge_shape = edge_shape / edge_peak if edge_peak > 0 else edge_shape
+        edge_native_wave = wave_out * (1.0 + zshift) * (1.0 + velshift_kms / C_LIGHT)
+
+        if edge_norm is None:
+            # Task #41: continuity condition (Kovacevic, Popovic &
+            # Kollatschny 2015, arXiv:1311.6653) -- the free-bound edge's
+            # unit-normalized shape at lambda=LAMBDA_BE exactly (where
+            # (lambda/LAMBDA_BE)**3=1, computed analytically, no
+            # interpolation needed) must, after scaling by edge_scale,
+            # equal the already-scaled line series' value at that same
+            # physical (shifted) wavelength.
+            edge_raw_at_edge = _planck_lambda(self.LAMBDA_BE, T_e) * (1.0 - np.exp(-tau_BE))
+            edge_unit_at_edge = edge_raw_at_edge / edge_peak if edge_peak > 0 else 0.0
+            edge_wave_shifted = self.LAMBDA_BE * (1.0 + zshift) * (1.0 + velshift_kms / C_LIGHT)
+            line_flux_at_edge = np.interp(edge_wave_shifted, wave_out, line_flux)
+            edge_scale = line_flux_at_edge / edge_unit_at_edge if edge_unit_at_edge > 0 else 0.0
+        else:
+            edge_scale = edge_norm
+
+        edge_flux = edge_scale * np.interp(wave_out, edge_native_wave, edge_shape, left=0.0, right=0.0)
 
         balmer_flux = edge_flux + line_flux
 

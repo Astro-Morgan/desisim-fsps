@@ -239,7 +239,7 @@ class TestBalmerContinuum(unittest.TestCase):
         old placeholder of 1.0.'''
         _, _, params = self.bc.spectrum(edge_norm=0.0, T_e=15000.0, log_ne=10.0, tau_BE=1.0,
                                          seed=1, backend='numpy')
-        self.assertAlmostEqual(params['line_norm'], BalmerContinuum.BROAD_NARROW_HBETA_RATIO, places=10)
+        self.assertAlmostEqual(params['line_norm'], BalmerContinuum.STANDALONE_BROAD_NARROW_HBETA_RATIO, places=10)
         self.assertNotEqual(params['line_norm'], 1.0)
 
     def test_default_edge_norm_is_continuous_with_line_series_at_the_edge(self):

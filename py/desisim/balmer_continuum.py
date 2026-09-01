@@ -220,17 +220,30 @@ class BalmerContinuum(object):
     # Task #41 (retroactive audit follow-up to task #32): literature-
     # anchored default for line_norm, replacing the previous arbitrary
     # "effective Hbeta flux of 1.0" default -- see feii_continuum.py's
-    # BROAD_NARROW_HBETA_RATIO (task #40) for the identical derivation;
-    # duplicated here rather than imported for the same module-self-
-    # containment reasons _bracket() is duplicated rather than imported
-    # (see this module's own docstring). This is this module's own
-    # broad-Hbeta-equivalent line's flux, in this pipeline's native
-    # narrow-Hbeta=1 unit (see EMSpectrum.spectrum()'s hbetaflux=None
-    # convention) -- i.e. line_norm=BROAD_NARROW_HBETA_RATIO means "this
-    # cascade's broad Hbeta is BROAD_NARROW_HBETA_RATIO times EMSpectrum's
-    # narrow Hbeta," matching this module's own docstring description of
-    # line_norm as "an effective Hbeta flux."
-    BROAD_NARROW_HBETA_RATIO = 5.0  # ⚠ MAGIC (order-of-magnitude only)
+    # STANDALONE_BROAD_NARROW_HBETA_RATIO (task #40) for the identical
+    # derivation; duplicated here rather than imported for the same
+    # module-self-containment reasons _bracket() is duplicated rather
+    # than imported (see this module's own docstring). This is this
+    # module's own broad-Hbeta-equivalent line's flux, in this pipeline's
+    # native narrow-Hbeta=1 unit (see EMSpectrum.spectrum()'s
+    # hbetaflux=None convention) -- i.e.
+    # line_norm=STANDALONE_BROAD_NARROW_HBETA_RATIO means "this cascade's
+    # broad Hbeta is that ratio times EMSpectrum's narrow Hbeta," matching
+    # this module's own docstring description of line_norm as "an
+    # effective Hbeta flux."
+    #
+    # Task #46: mock_spectrum.py's generate_qso_component() does NOT rely
+    # on this fixed fallback -- it draws its own shared
+    # hbeta_broad_narrow_ratio once per mock (see its own
+    # HBETA_BROAD_NARROW_RATIO_RANGE) and passes it explicitly as
+    # line_norm, kept consistent with the SAME draw used for
+    # feii_kwargs['optical_flux_hbeta']/['uv_flux_hbeta']. This constant
+    # is used ONLY as this module's own zero-argument fallback when
+    # spectrum() is called directly, outside the orchestrator (e.g. in
+    # this module's own unit tests) -- see feii_continuum.py's identical
+    # constant for the full history of why a plain fixed constant is not
+    # used by the orchestrator.
+    STANDALONE_BROAD_NARROW_HBETA_RATIO = 5.0  # ⚠ MAGIC (order-of-magnitude only; see mock_spectrum.HBETA_BROAD_NARROW_RATIO_RANGE for the real per-mock draw)
 
     def __init__(self, minwave=1000.0, maxwave=10000.0, cdelt_kms=20.0, log10wave=None):
         """
@@ -290,14 +303,19 @@ class BalmerContinuum(object):
                 the Hbeta-relative case-B ratios (i.e. an
                 "effective Hbeta flux" for this cascade -- a line with
                 ratio=1 would have flux exactly line_norm). Default None
-                (task #41): resolves to BROAD_NARROW_HBETA_RATIO (see its
-                own class-level comment for the derivation and caveats;
-                same order-of-magnitude anchor as
-                feii_continuum.FeIIPseudoContinuum.BROAD_NARROW_HBETA_RATIO
-                from task #40), replacing the previous uncalibrated
-                default of 1.0 (task #39's audit finding: 1.0 implied
-                broad Hbeta = narrow Hbeta, understating real Type 1
-                quasars' broad-line dominance). Pre-task-#41 callers that
+                (task #41): resolves to STANDALONE_BROAD_NARROW_HBETA_RATIO
+                (see its own class-level comment for the derivation and
+                caveats; same order-of-magnitude anchor as
+                feii_continuum.FeIIPseudoContinuum.STANDALONE_BROAD_NARROW_HBETA_RATIO
+                from task #40) when this module is used standalone,
+                replacing the previous uncalibrated default of 1.0 (task
+                #39's audit finding: 1.0 implied broad Hbeta = narrow
+                Hbeta, understating real Type 1 quasars' broad-line
+                dominance). Task #46: mock_spectrum.py's
+                generate_qso_component() overrides this default with a
+                properly drawn, cross-module-shared value instead of
+                relying on this fixed fallback -- see its own
+                HBETA_BROAD_NARROW_RATIO_RANGE. Pre-task-#41 callers that
                 never passed edge_norm/line_norm will see their absolute
                 output values change; callers that explicitly passed them
                 are completely unaffected.
@@ -340,7 +358,7 @@ class BalmerContinuum(object):
         # edge_norm's own new default depends on the fully-resolved line
         # series (see edge_norm's docstring above for the physical
         # continuity condition this implements).
-        line_scale = self.BROAD_NARROW_HBETA_RATIO if line_norm is None else line_norm
+        line_scale = self.STANDALONE_BROAD_NARROW_HBETA_RATIO if line_norm is None else line_norm
 
         wave_out = 10 ** self.log10wave
 

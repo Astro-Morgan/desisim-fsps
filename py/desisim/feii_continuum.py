@@ -241,20 +241,23 @@ class FeIIPseudoContinuum(object):
     # narrow-Hbeta=1 unit therefore requires one extra factor: the typical
     # broad/narrow Hbeta flux ratio in luminous, broad-line-dominated
     # ("Type 1"/Seyfert-1.0-like) quasars -- the population this fork's
-    # QSO pipeline actually targets. No single precisely-measured
-    # population value for this ratio was found in the literature search
-    # backing this task (unlike R_FeII and FeII(4570)/FeII(UV) below,
-    # which ARE precise measured population statistics); narrow Hbeta is
-    # widely reported to be a small (~10-20%) fraction of total Hbeta
-    # flux in such objects (e.g. the classification-dependent broad/
-    # narrow Halpha ratios in Seyfert unification schemes, which scale
-    # similarly for Hbeta), so BROAD_NARROW_HBETA_RATIO=5.0 (i.e. narrow
-    # ~17% of total) is used as an order-of-magnitude ⚠ MAGIC anchor, NOT
-    # a fitted or precisely-measured value -- flagged separately from the
-    # two precise ratios it's combined with below, and a natural target
-    # for future NPE-driven refinement or replacement with a dedicated
-    # narrow/broad Hbeta measurement.
-    BROAD_NARROW_HBETA_RATIO = 5.0  # ⚠ MAGIC (order-of-magnitude only)
+    # QSO pipeline actually targets.
+    #
+    # Task #46: this factor is NOT a fixed constant -- mock_spectrum.py's
+    # generate_qso_component() draws it ONCE per mock (see its own
+    # HBETA_BROAD_NARROW_RATIO_RANGE) and passes the resulting
+    # optical_flux_hbeta/uv_flux_hbeta into feii.spectrum() explicitly,
+    # so that this module and BalmerContinuum's line_norm always agree on
+    # the same broad-Hbeta reference for a given mock. An earlier version
+    # of this task used a plain fixed constant here, which the PI flagged
+    # as inconsistent with treating an uncertain physical quantity as a
+    # real (eventually NPE-calibrated) free parameter, and as a latent
+    # cross-module desync risk. STANDALONE_BROAD_NARROW_HBETA_RATIO below
+    # is used ONLY as this module's own zero-argument fallback when
+    # spectrum() is called directly, outside the orchestrator (e.g. in
+    # this module's own unit tests) -- it has no bearing on
+    # generate_qso_component()'s actual behavior.
+    STANDALONE_BROAD_NARROW_HBETA_RATIO = 5.0  # ⚠ MAGIC (order-of-magnitude only; see mock_spectrum.HBETA_BROAD_NARROW_RATIO_RANGE for the real per-mock draw)
 
     # R_FeII = EW(FeII 4434-4684)/EW(Hbeta,broad), i.e. the same quantity
     # as this module's `optical` band relative to broad Hbeta: median
@@ -277,10 +280,10 @@ class FeIIPseudoContinuum(object):
     R_FEII_UV_BROAD_HBETA = R_FEII_OPTICAL_BROAD_HBETA / FEII_OPTICAL_TO_UV_RATIO
 
     # Final defaults, converted into this pipeline's native narrow-Hbeta=1
-    # unit via BROAD_NARROW_HBETA_RATIO (see its own comment above for why
+    # unit via STANDALONE_BROAD_NARROW_HBETA_RATIO (see its own comment above for why
     # this last factor is the weakest link in this derivation chain).
-    DEFAULT_OPTICAL_FLUX_HBETA = R_FEII_OPTICAL_BROAD_HBETA * BROAD_NARROW_HBETA_RATIO
-    DEFAULT_UV_FLUX_HBETA = R_FEII_UV_BROAD_HBETA * BROAD_NARROW_HBETA_RATIO
+    DEFAULT_OPTICAL_FLUX_HBETA = R_FEII_OPTICAL_BROAD_HBETA * STANDALONE_BROAD_NARROW_HBETA_RATIO
+    DEFAULT_UV_FLUX_HBETA = R_FEII_UV_BROAD_HBETA * STANDALONE_BROAD_NARROW_HBETA_RATIO
 
     def __init__(self, minwave=1000.0, maxwave=10000.0, cdelt_kms=20.0, log10wave=None):
         """

@@ -109,6 +109,7 @@ from desisim.agn_continuum import AGNPowerLawContinuum
 from desisim.feii_continuum import FeIIPseudoContinuum
 from desisim.balmer_continuum import BalmerContinuum
 from desisim.igm_absorption import IGMAbsorption
+from desisim.bal_trough import BALTrough
 from desisim.decompose import combine_into_channels
 from desisim.qso_galaxy_blend import blend_qso_galaxy
 
@@ -227,7 +228,8 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
                             dust=None, dust_kwargs=None,
                             feii=None, feii_kwargs=None,
                             balmer=None, balmer_kwargs=None,
-                            zqso=None, igm=None, igm_kwargs=None, seed=None):
+                            zqso=None, igm=None, igm_kwargs=None,
+                            bal=None, bal_kwargs=None, seed=None):
     """Assemble one QSO-side additive spectrum: simqso broken power-law
     continuum + QSO-type dust attenuation + broad (AGN-like) emission +
     blueshifted associated-absorber systems + Fe II UV/optical pseudo-
@@ -305,6 +307,22 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
             fuller baseline than dust/ism/associated's own convention was
             chosen here (the forest genuinely eats into the QSO's own
             blue emission features, most visibly its own Lyalpha line).
+        bal (BALTrough, optional): pre-built instance. Default None builds
+            BALTrough(log10wave=np.log10(wave)) -- a self-contained,
+            physically-parametrized broad absorption line (BAL) trough
+            model (bal_trough.py, task #36), empirically backtested
+            against the real public SDSS DR14Q balnicity-index
+            distribution. Unlike igm, bal needs no zqso -- BAL troughs are
+            rest-frame intrinsic/associated absorption, same convention
+            as `associated`.
+        bal_kwargs (dict, optional): forwarded to bal.spectrum() (e.g.
+            hasbal/balprob/strength/v_min_kms/v_max_kms/depth/smooth_kms/
+            lines -- see bal_trough.py). Default None draws hasbal from
+            BALTrough.BALPROB (~16% of QSOs). The flux this channel
+            absorbs is the full pre-BAL QSO flux (continuum_agn +
+            broad_emission + feii_flux + balmer_flux), same reasoning as
+            igm_kwargs above (a real BAL trough measurably eats into the
+            QSO's own blue emission-line flux, most visibly CIV itself).
         seed (int, optional): top-level seed; derives independent child
             seeds for each submodule unless overridden inside the
             respective *_kwargs dict.
@@ -322,8 +340,9 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
     feii_kwargs = dict(feii_kwargs) if feii_kwargs else {}
     balmer_kwargs = dict(balmer_kwargs) if balmer_kwargs else {}
     igm_kwargs = dict(igm_kwargs) if igm_kwargs else {}
+    bal_kwargs = dict(bal_kwargs) if bal_kwargs else {}
 
-    seed_agn, seed_em, seed_associated, seed_dust, seed_feii, seed_balmer, seed_igm = _child_seeds(seed, 7)
+    seed_agn, seed_em, seed_associated, seed_dust, seed_feii, seed_balmer, seed_igm, seed_bal = _child_seeds(seed, 8)
 
     if agn is None:
         agn = AGNPowerLawContinuum()
@@ -388,6 +407,15 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
         igmflux, igmwave, igmparams = igm.spectrum(flux_to_absorb, zqso, **igm_kwargs)
         igm_flux = _harmonize(wave, igmwave, igmflux)
 
+    if bal is None:
+        bal = BALTrough(log10wave=np.log10(wave))
+    bal_kwargs.setdefault('seed', seed_bal)
+    # Full pre-BAL QSO flux, not continuum_agn alone -- see bal_kwargs
+    # docstring above and igm_kwargs' identical reasoning.
+    flux_to_absorb_bal = continuum_agn + broad_emission + feii_flux + balmer_flux
+    balflux, balwave, balparams = bal.spectrum(flux_to_absorb_bal, **bal_kwargs)
+    bal_flux = _harmonize(wave, balwave, balflux)
+
     out = combine_into_channels(wave, continuum_stellar=np.zeros_like(wave),
                                  continuum_agn=continuum_agn,
                                  broad_emission=broad_emission,
@@ -395,11 +423,12 @@ def generate_qso_component(wave, agn=None, agn_kwargs=None,
                                  dust_flux=dust_flux,
                                  feii_flux=feii_flux,
                                  balmer_flux=balmer_flux,
-                                 igm_flux=igm_flux)
+                                 igm_flux=igm_flux,
+                                 bal_flux=bal_flux)
     out['draws'] = dict(agn_slopes=slopetable, em_line_total=emline_total,
                          associated_line=assocline, dust_theta=dusttable,
                          feii_params=feiiparams, balmer_params=balmerparams,
-                         igm_params=igmparams)
+                         igm_params=igmparams, bal_params=balparams)
     return out
 
 

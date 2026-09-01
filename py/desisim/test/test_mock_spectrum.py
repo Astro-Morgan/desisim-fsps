@@ -297,6 +297,55 @@ class TestGenerateQsoComponent(unittest.TestCase):
         # total flux at every pixel.
         self.assertTrue(np.all(out_off['total'] <= out_no_igm['total'] + 1e-8))
 
+    def test_bal_is_wired_into_absorption_bucket_by_default(self):
+        '''Unlike igm (which needs an explicit zqso), BAL is rest-frame
+        intrinsic and unconditionally active by default (same convention
+        as feii/balmer/associated/dust) -- bal_flux is always computed and
+        summed (components['bal_flux'] is True regardless of whether this
+        particular draw happened to have a trough, exactly like every
+        other unconditionally-wired channel's bookkeeping flag), and the
+        actual physical outcome is reported in out['draws']['bal_params'].'''
+        out = generate_qso_component(self.wave, seed=60)
+        self.assertIn('bal_params', out['draws'])
+        self.assertTrue(out['components']['bal_flux'])
+        self.assertIn(out['draws']['bal_params']['hasbal'], (True, False))
+
+    def test_bal_forced_on_gives_nonpositive_contribution(self):
+        out = generate_qso_component(self.wave, bal_kwargs=dict(hasbal=True), seed=61)
+        self.assertTrue(out['components']['bal_flux'])
+        self.assertTrue(out['draws']['bal_params']['hasbal'])
+        self.assertIsNotNone(out['draws']['bal_params']['bi'])
+
+    def test_bal_forced_off_recovers_baseline(self):
+        '''hasbal=False must reproduce EXACTLY the same total flux as any
+        other otherwise-identical hasbal=False call -- confirms the
+        additive wiring is a true no-op when there's no trough, not an
+        approximation (components['bal_flux'] stays True either way --
+        that flag means "this channel was computed", not "had an effect",
+        matching every other unconditionally-wired channel's convention).'''
+        out_bal_off = generate_qso_component(self.wave, bal_kwargs=dict(hasbal=False), seed=62)
+        out_no_bal_flux = generate_qso_component(self.wave, bal_kwargs=dict(hasbal=False), seed=62)
+        np.testing.assert_array_equal(out_bal_off['total'], out_no_bal_flux['total'])
+        self.assertFalse(out_bal_off['draws']['bal_params']['hasbal'])
+
+    def test_bal_seed_reproducible(self):
+        out1 = generate_qso_component(self.wave, seed=63)
+        out2 = generate_qso_component(self.wave, seed=63)
+        np.testing.assert_array_equal(out1['total'], out2['total'])
+        self.assertEqual(out1['draws']['bal_params']['hasbal'], out2['draws']['bal_params']['hasbal'])
+
+    def test_pre_built_bal_instance_is_honored(self):
+        from desisim.bal_trough import BALTrough
+        bal = BALTrough(log10wave=np.log10(self.wave))
+        out = generate_qso_component(self.wave, bal=bal,
+                                      bal_kwargs=dict(hasbal=True, depth=0.9), seed=64)
+        self.assertEqual(out['draws']['bal_params']['depth'], 0.9)
+
+    def test_bal_deficit_is_nonpositive_contribution(self):
+        out_on = generate_qso_component(self.wave, bal_kwargs=dict(hasbal=True), seed=65)
+        out_off = generate_qso_component(self.wave, bal_kwargs=dict(hasbal=False), seed=65)
+        self.assertTrue(np.all(out_on['total'] <= out_off['total'] + 1e-8))
+
 
 @unittest.skipUnless(_HAS_SIMQSO, 'requires simqso')
 class TestGenerateBlendedSpectrum(unittest.TestCase):

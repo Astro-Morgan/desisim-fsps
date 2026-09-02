@@ -1199,5 +1199,163 @@ class TestEmpiricalBacktestBroadLineScatter(unittest.TestCase):
             self.assertAlmostEqual(drawn_sigma, real_sigma, delta=0.05)
 
 
+class TestEmpiricalBacktestLineProfileShape(unittest.TestCase):
+    '''Task #44 (retroactive audit follow-up to task #34): confirm the
+    GH_RANGE / GH_H4_RANGE bounds on the Gauss-Hermite h3 (skewness) and
+    h4 (kurtosis) draws actually produce line shapes consistent with real
+    quasar Hbeta profile measurements, rather than trusting the class
+    comment alone.
+
+    No AGN sample reports Gauss-Hermite h3/h4 directly for quasar broad
+    lines (confirmed by literature search). What real samples DO report
+    is the closely related percentile-based Asymmetry Index (A.I.) and
+    Kurtosis Index (K.I.) of Marziani et al. (1996), so this test computes
+    A.I./K.I. directly from this fork's actual GH profile function
+    (_lines_to_spectrum_numpy's functional form, reimplemented here on a
+    dense velocity grid rather than re-fitting a spectrum) and compares
+    against real, cited population statistics.
+
+    Real reference values (Zamfir, Sulentic, Marziani & Dultzin 2010,
+    MNRAS 403, 1759, arXiv:0912.4306, Table 1, Eigenvector-1 Populations
+    A/B, ~470 SDSS Hbeta profiles):
+      - Population A (N=260): A.I. = 0.002 +/- 0.118, K.I. = 0.356 +/- 0.063
+      - Population B (N=209): A.I. = 0.096 +/- 0.155, K.I. = 0.383 +/- 0.092
+
+    Population A is used below as the "sigma" reference for both A.I. and
+    K.I. checks (rather than B): its A.I. mean is close to zero and its
+    scatter is tighter, making it the more conservative (harder-to-pass)
+    and symmetry-appropriate yardstick for judging a SYMMETRIC h3 range --
+    Population B's own A.I. mean is itself offset positive (+0.096, a
+    real red-asymmetric bias in that population), which would otherwise
+    make the two signed extremes of a symmetric h3 range look spuriously
+    different distances from "typical" purely because of which population
+    you compared to.
+    '''
+
+    POP_A_AI_MEAN, POP_A_AI_SIGMA = 0.002, 0.118
+    POP_A_KI_MEAN, POP_A_KI_SIGMA = 0.356, 0.063
+    GAUSSIAN_KI = 0.4555  # standard reference value for a pure Gaussian
+
+    @staticmethod
+    def _profile(w, h3, h4):
+        sqrt2 = np.sqrt(2.0)
+        gauss = np.exp(-0.5 * w ** 2)
+        H3 = (2.0 * sqrt2 * w ** 3 - 3.0 * sqrt2 * w) / np.sqrt(6.0)
+        H4 = (4.0 * w ** 4 - 12.0 * w ** 2 + 3.0) / np.sqrt(24.0)
+        return np.clip(gauss * (1.0 + h3 * H3 + h4 * H4), 0.0, None)
+
+    @classmethod
+    def _find_wing(cls, h3, h4, level, side, peak_w, peak_val, search_hi=8.0):
+        from scipy.optimize import brentq
+        target = level * peak_val
+        f = lambda w: cls._profile(np.array([w]), h3, h4)[0] - target
+        lo, hi = (peak_w, search_hi) if side == 'red' else (-search_hi, peak_w)
+        ws = np.linspace(lo, hi, 4000)
+        vals = np.array([f(x) for x in ws])
+        idxs = range(len(ws)) if side == 'red' else range(len(ws) - 1, -1, -1)
+        prev = None
+        for i in idxs:
+            if prev is not None and np.sign(vals[i]) != np.sign(prev[1]):
+                a, b = sorted((prev[0], ws[i]))
+                return brentq(f, a, b)
+            prev = (ws[i], vals[i])
+        raise RuntimeError('wing crossing not found')
+
+    @classmethod
+    def _ai_ki(cls, h3, h4):
+        '''A.I.(1/4) and K.I. (Marziani et al. 1996, as used by Zamfir
+        et al. 2010) computed directly from this fork's GH profile.'''
+        ws = np.linspace(-6, 6, 20001)
+        vals = cls._profile(ws, h3, h4)
+        peak_idx = np.argmax(vals)
+        peak_w, peak_val = ws[peak_idx], vals[peak_idx]
+        wR90 = cls._find_wing(h3, h4, 0.9, 'red', peak_w, peak_val)
+        wB90 = cls._find_wing(h3, h4, 0.9, 'blue', peak_w, peak_val)
+        v_peak = 0.5 * (wR90 + wB90)
+        wR25 = cls._find_wing(h3, h4, 0.25, 'red', peak_w, peak_val)
+        wB25 = cls._find_wing(h3, h4, 0.25, 'blue', peak_w, peak_val)
+        wR75 = cls._find_wing(h3, h4, 0.75, 'red', peak_w, peak_val)
+        wB75 = cls._find_wing(h3, h4, 0.75, 'blue', peak_w, peak_val)
+        AI = (wR25 + wB25 - 2 * v_peak) / (wR25 - wB25)
+        KI = (wR75 - wB75) / (wR25 - wB25)
+        return AI, KI
+
+    def test_pure_gaussian_matches_reference_kurtosis_index(self):
+        '''Sanity check on the A.I./K.I. helper itself: h3=h4=0 must
+        reproduce the well-known Gaussian K.I. value, confirming the
+        percentile-crossing implementation is correct before trusting it
+        to judge GH_RANGE/GH_H4_RANGE.'''
+        AI, KI = self._ai_ki(0.0, 0.0)
+        self.assertAlmostEqual(AI, 0.0, places=6)
+        self.assertAlmostEqual(KI, self.GAUSSIAN_KI, delta=0.001)
+
+    def test_h3_range_extremes_are_within_a_few_sigma_of_real_asymmetry(self):
+        '''GH_RANGE's h3 bounds were left unchanged by task #44 -- confirm
+        why: their predicted A.I. sits within ~3.5-4 sigma of the real
+        Population A mean, a reasonable outer bound for rare/extreme
+        objects rather than an overshoot into never-observed territory
+        (for comparison, GH_H4_RANGE's old, rejected -0.3 lower bound is
+        ~5.7 sigma away by the same standard -- see the next test).'''
+        for h3 in EMSpectrum.GH_RANGE:
+            AI, _ = self._ai_ki(h3, 0.0)
+            n_sigma = abs(AI - self.POP_A_AI_MEAN) / self.POP_A_AI_SIGMA
+            self.assertLess(n_sigma, 4.0)
+
+    def test_h4_range_lower_bound_no_longer_overshoots_real_kurtosis(self):
+        '''The task #44 fix: GH_H4_RANGE's lower bound (-0.12) lands at
+        roughly the same ~3.5 sigma-from-Population-A-mean outer bound
+        that GH_RANGE's h3 extremes already imply (previous test), rather
+        than the old symmetric -0.3 (which predicted K.I. many sigma
+        beyond anything in the real sample -- see the next test).'''
+        lo, hi = EMSpectrum.GH_H4_RANGE
+        self.assertAlmostEqual(lo, -0.12, places=6)
+        self.assertAlmostEqual(hi, 0.3, places=6)
+        _, KI_lo = self._ai_ki(0.0, lo)
+        n_sigma_lo = abs(KI_lo - self.POP_A_KI_MEAN) / self.POP_A_KI_SIGMA
+        self.assertLess(n_sigma_lo, 4.0)
+
+    def test_old_symmetric_h4_lower_bound_would_have_overshot(self):
+        '''Regression documentation: the OLD -0.3 lower bound (now only
+        used for h3) predicts a K.I. far outside the real sample when
+        applied to h4, which is exactly why task #44 gave h4 its own,
+        asymmetric range instead of leaving it sharing GH_RANGE.'''
+        _, KI_old = self._ai_ki(0.0, -0.3)
+        n_sigma_old = abs(KI_old - self.POP_A_KI_MEAN) / self.POP_A_KI_SIGMA
+        self.assertGreater(n_sigma_old, 5.0)
+
+    def test_spectrum_actually_uses_gh_h4_range_not_gh_range_for_h4_draws(self):
+        '''End-to-end regression guard: temporarily swaps in a
+        RandomState subclass that records every (low, high) bound pair
+        spectrum() actually asks uniform() for (numpy.random.RandomState
+        is an immutable C-extension type, so its methods can't be patched
+        directly -- swapping the class object numpy.random.RandomState
+        points to is the standard workaround, and is safe here because
+        templates.py resolves that attribute fresh at call time). Confirms
+        GH_H4_RANGE's bounds are among them (h4's real draw calls) while
+        GH_RANGE's bounds also still appear (h3's draw calls are
+        unaffected) -- i.e. the two ranges are truly wired to the right
+        parameters, not accidentally left sharing one range.'''
+        em = EMSpectrum(minwave=1200.0, maxwave=10000.0, include_new_lines=True,
+                         include_line_asymmetry=True)
+        fixed_ratios = dict(oiiihbeta=-0.2, oiihbeta=0.1, niihbeta=-0.2, siihbeta=-0.3)
+
+        seen_bounds = []
+
+        class _RecordingRandomState(np.random.RandomState):
+            def uniform(self, low=0.0, high=1.0, *args, **kwargs):
+                seen_bounds.append((low, high))
+                return super().uniform(low, high, *args, **kwargs)
+
+        original_randomstate = np.random.RandomState
+        np.random.RandomState = _RecordingRandomState
+        try:
+            em.spectrum(seed=1, hbetaflux=1e-16, **fixed_ratios)
+        finally:
+            np.random.RandomState = original_randomstate
+
+        self.assertIn(EMSpectrum.GH_H4_RANGE, seen_bounds)
+        self.assertIn(EMSpectrum.GH_RANGE, seen_bounds)
+
+
 if __name__ == '__main__':
     unittest.main()

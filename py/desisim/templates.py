@@ -481,15 +481,49 @@ class EMSpectrum(object):
     # line-group, not per individual line" simplification already used
     # for linesigma/broadsigma (see BROADSIGMA_RANGE_KMS's comment); a
     # future per-line refinement is possible but not implemented here.
-    # ⚠ MAGIC: this range is NOT fit to any AGN dataset -- no AGN-specific
-    # calibration of h3/h4 was found in the literature search backing this
-    # task. It is inherited from the general Gauss-Hermite dynamical-
-    # modeling literature's own validity heuristic (van der Marel & Franx
-    # 1993; Cappellari et al. 2002): |h3|, |h4| beyond roughly this scale
-    # start producing implausibly large negative excursions in the profile
-    # wings even after clipping. Deferred to NPE calibration like every
-    # other ⚠ MAGIC range in this fork.
+    #
+    # Task #44 empirical-backtest audit: no AGN sample reports h3/h4
+    # directly (confirmed by literature search -- Gauss-Hermite fits to
+    # AGN broad lines exist, e.g. Riffel 2010's PROFIT paper, but are
+    # applied to NLR outflow kinematics, not tabulated for quasar BLR
+    # profiles). What real quasar samples DO report is the closely
+    # related percentile-based Asymmetry Index (A.I.) and Kurtosis Index
+    # (K.I.) of Marziani et al. (1996), tabulated for ~470 SDSS Hbeta
+    # profiles by Zamfir, Sulentic, Marziani & Dultzin (2010, MNRAS 403,
+    # 1759, arXiv:0912.4306; their Table 1, Eigenvector-1 Populations A/B):
+    # A.I. = 0.002+/-0.118 (Pop A, N=260), 0.096+/-0.155 (Pop B, N=209);
+    # K.I. = 0.356+/-0.063 (Pop A), 0.383+/-0.092 (Pop B). A plain Gaussian
+    # has K.I.=0.4555 (verified numerically against this fork's actual
+    # profile() function below), confirming real Hbeta profiles are
+    # systematically more peaked/Lorentzian than Gaussian, as the
+    # paragraph above already asserted qualitatively.
+    #
+    # Numerically computing A.I./K.I. from this fork's actual GH profile
+    # (see _lines_to_spectrum_numpy) across the old symmetric (-0.3, 0.3)
+    # range for both h3 and h4, using Population A (the tighter, near-
+    # zero-mean population -- the more conservative and symmetry-
+    # appropriate yardstick, since Pop B's own A.I. mean is itself offset
+    # positive) as the sigma reference: h3's +-0.3 extremes land at ~3.5
+    # sigma from the Pop A A.I. mean, a reasonable outer bound covering
+    # rare/extreme objects, not a typical one. h4's NEGATIVE side is not
+    # comparably supported: h4=-0.12 alone already predicts K.I.=0.577,
+    # the SAME ~3.5 sigma from the Pop A K.I. mean as h3's extremes, but
+    # the old, more negative h4=-0.2/-0.3 predict K.I.=0.66/0.72 (4.8/5.7
+    # sigma) -- i.e. roughly the outer third of the old h4 range's
+    # probability mass sat in a kurtosis regime far beyond even h3's own
+    # already-generous outer-bound standard. h4's positive side needed no
+    # change: it stays within/near the real K.I. range across the full
+    # (0, 0.3) span. GH_RANGE is kept for h3 (unchanged); h4 gets its
+    # own, asymmetric GH_H4_RANGE, with the SAME ~3.5 sigma-from-Pop-A-
+    # mean outer-bound standard GH_RANGE already implies for h3, applied
+    # consistently to fix h4's lower edge at -0.12. Still a MAGIC range
+    # in the sense of not being a precision fit or itself drawn from a
+    # published h3/h4 distribution -- just now bounded by a real,
+    # quantitatively-checked outer scale instead of an arbitrary
+    # symmetric guess. Deferred to NPE calibration like every other
+    # MAGIC range in this fork.
     GH_RANGE = (-0.3, 0.3)
+    GH_H4_RANGE = (-0.12, 0.3)
 
     def __init__(self, minwave=3650.0, maxwave=7075.0, cdelt_kms=20.0, log10wave=None,
                  include_mgii=False, include_new_lines=False, include_broad_velshift=False,
@@ -699,7 +733,9 @@ class EMSpectrum(object):
                 Gaussian, exact pre-task-#34 behavior) unless
                 include_line_asymmetry=True was passed to the constructor,
                 in which case each not-explicitly-given value draws
-                uniformly from GH_RANGE.
+                uniformly from GH_RANGE (h3) or GH_H4_RANGE (h4 -- see
+                that constant's task #44 comment for why it is not the
+                same range as h3).
             broad_h3, broad_h4 (float, optional): Same as narrow_h3/
                 narrow_h4 but for the WHOLE broad-line group (independent
                 draws/values -- narrow and broad need not share the same
@@ -753,7 +789,9 @@ class EMSpectrum(object):
         if narrow_h3 is None:
             narrow_h3 = rand.uniform(*self.GH_RANGE) if self.include_line_asymmetry else 0.0
         if narrow_h4 is None:
-            narrow_h4 = rand.uniform(*self.GH_RANGE) if self.include_line_asymmetry else 0.0
+            # Task #44: h4 uses its own (asymmetric) range -- see
+            # GH_H4_RANGE's class-level comment.
+            narrow_h4 = rand.uniform(*self.GH_H4_RANGE) if self.include_line_asymmetry else 0.0
 
         line = self.line.copy()
         nline = len(line)
@@ -900,7 +938,9 @@ class EMSpectrum(object):
             if broad_h3 is None:
                 broad_h3 = rand.uniform(*self.GH_RANGE) if self.include_line_asymmetry else 0.0
             if broad_h4 is None:
-                broad_h4 = rand.uniform(*self.GH_RANGE) if self.include_line_asymmetry else 0.0
+                # Task #44: h4 uses its own (asymmetric) range -- see
+                # GH_H4_RANGE's class-level comment.
+                broad_h4 = rand.uniform(*self.GH_H4_RANGE) if self.include_line_asymmetry else 0.0
 
             for _name in self.NEW_LINE_NAMES:
                 _prior = new_line_priors[_name]

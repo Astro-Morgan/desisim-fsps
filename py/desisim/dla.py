@@ -15,7 +15,7 @@ from desiutil.log import get_logger
 
 c_cgs = const.c.to('cm/s').value
 
-def insert_dlas(wave, zem, rstate=None, seed=None, fNHI=None, debug=False, **kwargs):
+def insert_dlas(wave, zem, rstate=None, seed=None, fNHI=None, boost=1.6, debug=False, **kwargs):
     """ Insert zero, one or more DLAs into a given spectrum towards a source
     with a given redshift
     Args:
@@ -24,6 +24,15 @@ def insert_dlas(wave, zem, rstate=None, seed=None, fNHI=None, debug=False, **kwa
         rstate (numpy.random.rstate, optional): for random numberes
         seed (int, optional):
         fNHI (spline): f_NHI object
+        boost (float, optional): forwarded to calc_lz() -- see that
+            function's docstring. Default 1.6 preserves this function's
+            historical behavior exactly (unchanged default, so any
+            existing caller that doesn't pass boost sees identical
+            output to before). Task #45 (desisim-fsps fork): callers
+            that want this exposed as a drawn NPE-calibratable parameter
+            rather than a fixed constant should pass their own drawn
+            value here -- see IGMAbsorption.DLA_BOOST_RANGE in
+            igm_absorption.py for that fork's usage.
         **kwargs: Passed to init_fNHI()
 
     Returns:
@@ -46,7 +55,7 @@ def insert_dlas(wave, zem, rstate=None, seed=None, fNHI=None, debug=False, **kwa
     dz[-1] = dz[-2]
     gdz = (zlya < zem) & (wave > 910.*(1+zem))
     # l(z) -- Uses DLA for SLLS too which is fine
-    lz = calc_lz(zlya[gdz])
+    lz = calc_lz(zlya[gdz], boost=boost)
     cum_lz = np.cumsum(lz*dz[gdz])
     tot_lz = cum_lz[-1]
     if len(cum_lz)<2:
@@ -204,13 +213,24 @@ def calc_lz(z, boost=1.6):
     """
     Args:
         z (ndarray): redshift values for evaluation
-        boost (float): boost for SLLS (should be 1 if only running DLAs)
+        boost (float): boost for SLLS (should be 1 if only running DLAs).
+            boost=1 is an exact, verified match to Prochaska, Hennawi &
+            Herbert-Fort (2008, ApJ 675, 1002)'s Eq. 5 for intervening
+            DLAs at z>2 (confirmed directly against that paper's text
+            during the desisim-fsps fork's task #45 backtest audit).
+            The default boost=1.6, used to extend coverage down into the
+            sub-DLA/SLLS column-density range, is NOT independently
+            cited -- despite extensive literature search during that same
+            audit, no source for this specific multiplier was found. It
+            is kept as the default for backward compatibility (unchanged
+            behavior for any pre-existing caller), but should be treated
+            as an honest, uncited legacy value, not a measurement.
 
     Returns:
         ndarray:  l(z) aka dN/dz values of DLAs
 
     """
-    lz = boost * 0.6 * np.exp(-7./z**2)  # Prochaska et al. 2008, ApJ, 675, 1002
+    lz = boost * 0.6 * np.exp(-7./z**2)  # Prochaska et al. 2008, ApJ, 675, 1002 (boost=1 case)
     return lz
 
 

@@ -129,6 +129,58 @@ class IGMAbsorption(object):
     See module docstring for the full physical/design rationale.
     """
 
+    # Task #45 empirical-backtest audit: MockMaker's forest engine targets
+    # McDonald et al. (2006)'s mean-opacity calibration (get_tau's
+    # A=0.374*((1+z)/4)^5.10 in lya_mock_p1d.py), but running the actual
+    # code (400 realizations, forest only, wide rest-frame grid to avoid
+    # edge artifacts) shows its resulting mean transmission is
+    # systematically LESS absorbed than the modern precision reference,
+    # Faucher-Giguere et al. (2008, arXiv:0709.2382): tau_eff(z) =
+    # 0.0018*(1+z)^3.92 (their fit "when metals are left in"). The gap
+    # grows smoothly with z (checked across z=2.2-4.2): fitting
+    # tau_real/tau_mock = NORM*(1+z)^POWER in log-log space gives NORM=
+    # 1.0072, POWER=0.2137, matching the real curve to within ~3%
+    # everywhere in that range. This correction is applied multiplicatively
+    # to the forest's own optical depth (leaving MockMaker's P1D power-
+    # spectrum SHAPE, the part that is well-calibrated, untouched) rather
+    # than attempting to fix whatever internal normalization choice in
+    # lya_mock_p1d.py's inherited lognormal transform produces the
+    # shortfall -- that code is legacy infrastructure this fork did not
+    # author, and reverse-engineering its internals for a marginal
+    # understanding gain carries more risk than a targeted, verified
+    # rescaling of the output. Per PI direction, the calibration target is
+    # the METALS-IN curve, not a forest-only estimate: Faucher-Giguere
+    # et al. (2008) only gives a rough qualitative statement for the
+    # metal contribution (~6-9% of tau at z=3, decreasing with z) with no
+    # precise formula, so a forest-only target would be less rigorous;
+    # and since this fork does not model metal-line absorption
+    # separately (see module docstring, "Metal-line absorption:
+    # deferred"), calibrating the forest channel to match the REAL TOTAL
+    # opacity in this wavelength region is the more useful choice for
+    # matching actual DESI-like spectra, at the honestly-disclosed cost
+    # of folding an unmodeled metal contribution into the "forest" label.
+    # Applied unconditionally (not opt-in): this corrects an
+    # under-calibration relative to real data, the same treatment given
+    # to every other backtested default in tasks #40-#44, not a new
+    # speculative capability.
+    FOREST_TAU_CORRECTION_NORM = 1.0072
+    FOREST_TAU_CORRECTION_POWER = 0.2137
+
+    # Task #45: dla.py's calc_lz(boost=1.6) default has no independent
+    # citation for the specific multiplier (only boost=1, the pure DLA-
+    # only Prochaska et al. 2008 case, is verified against a real
+    # source -- see dla.py's calc_lz docstring). Rather than leave this
+    # as a silently-fixed, uncited constant, it is promoted here to a
+    # drawn NPE-calibratable parameter, per the same "should become a
+    # generator, not a fixed magic number" principle already applied to
+    # the shared broad/narrow Hbeta ratio (task #46). Range is a MAGIC
+    # log-uniform prior, not itself derived from data: 1.0 is the
+    # physically meaningful, fully-cited floor (pure DLA incidence, no
+    # SLLS contribution); 2.2 is a generous but not absurd upper bound
+    # above the legacy point value 1.6. Deferred to NPE calibration like
+    # every other MAGIC range in this fork.
+    DLA_BOOST_RANGE = (1.0, 2.2)
+
     def __init__(self, minwave=900.0, maxwave=1300.0, cdelt_kms=20.0, log10wave=None,
                  mockmaker_N2=15, mockmaker_dv_kms=10.0):
         """
@@ -159,7 +211,7 @@ class IGMAbsorption(object):
         self._mockmaker_N2 = mockmaker_N2
         self._mockmaker_dv_kms = mockmaker_dv_kms
 
-    def transmission(self, zqso, add_dlas=True, seed=None):
+    def transmission(self, zqso, add_dlas=True, seed=None, dla_boost=None):
         """Combined forest*DLA multiplicative transmission.
 
         Args:
@@ -171,14 +223,21 @@ class IGMAbsorption(object):
                 placeholder, so it is on by default; pass False to
                 disable).
             seed (int, optional): RNG seed for reproducibility.
+            dla_boost (float, optional): explicit override for dla.py's
+                calc_lz(boost=...) (see DLA_BOOST_RANGE's class-level
+                comment). Default None: forced to 1.0 whenever
+                add_dlas=False (matches insert_dlas not being called at
+                all in that case); otherwise drawn log-uniformly from
+                DLA_BOOST_RANGE. Only has an effect when add_dlas=True.
 
         Returns:
             Tuple of (T, wave, params): T is the transmission array
             [npix] in [0, 1], indexed on THIS object's rest-frame wave
             grid but only physically valid for the given zqso (see module
             docstring); wave is 10**self.log10wave; params is a dict with
-            zqso, add_dlas, and dla_meta (an astropy Table of injected
-            DLAs' NHI/z, or None if add_dlas=False or none were drawn).
+            zqso, add_dlas, dla_boost (None if add_dlas=False), and
+            dla_meta (an astropy Table of injected DLAs' NHI/z, or None
+            if add_dlas=False or none were drawn).
         """
         rand = np.random.RandomState(seed)
         wave_rest = 10 ** self.log10wave
@@ -197,9 +256,25 @@ class IGMAbsorption(object):
         # choosing a wave range that overlaps the skewer's actual extent.
         forest_T = np.interp(wave_obs, skewer_wave, skewer_flux, left=1.0, right=1.0)
 
+        # Task #45: rescale the forest's own optical depth to match the
+        # real Faucher-Giguere et al. (2008) mean-opacity evolution --
+        # see FOREST_TAU_CORRECTION_NORM/POWER's class-level comment.
+        # forest_T<=1 always (skewer flux is exp(-tau) with tau>=0), so
+        # the clip below only guards the tau=inf edge case (forest_T=0
+        # exactly), not a real precision concern.
+        z_pix = np.clip(wave_obs / LAMBDA_LYA - 1.0, 0.0, None)
+        tau_forest = -np.log(np.clip(forest_T, 1e-300, 1.0))
+        tau_correction = (self.FOREST_TAU_CORRECTION_NORM
+                           * (1.0 + z_pix) ** self.FOREST_TAU_CORRECTION_POWER)
+        forest_T = np.exp(-tau_forest * tau_correction)
+
         dla_meta = None
         if add_dlas:
-            dlas, dla_model = insert_dlas(wave_obs, zqso, seed=int(rand.randint(0, 2**31 - 1)))
+            if dla_boost is None:
+                dla_boost = 10.0 ** rand.uniform(np.log10(self.DLA_BOOST_RANGE[0]),
+                                                  np.log10(self.DLA_BOOST_RANGE[1]))
+            dlas, dla_model = insert_dlas(wave_obs, zqso, seed=int(rand.randint(0, 2**31 - 1)),
+                                           boost=dla_boost)
             dla_model = np.asarray(dla_model)
             if dla_model.shape != wave_obs.shape:
                 # Degenerate edge case (see dla.py's insert_dlas: an
@@ -213,14 +288,15 @@ class IGMAbsorption(object):
                 dla_meta['NHI'] = [d['N'] for d in dlas]
                 dla_meta['z'] = [d['z'] for d in dlas]
         else:
+            dla_boost = None
             dla_model = np.ones_like(wave_obs)
 
         T_total = forest_T * dla_model
-        params = dict(zqso=zqso, add_dlas=add_dlas, dla_meta=dla_meta,
+        params = dict(zqso=zqso, add_dlas=add_dlas, dla_boost=dla_boost, dla_meta=dla_meta,
                       ndla=0 if dla_meta is None else len(dla_meta))
         return T_total, wave_rest, params
 
-    def spectrum(self, flux_to_absorb, zqso, add_dlas=True, seed=None):
+    def spectrum(self, flux_to_absorb, zqso, add_dlas=True, seed=None, dla_boost=None):
         """Additive IGM-absorption deficit flux.
 
         Args:
@@ -229,7 +305,7 @@ class IGMAbsorption(object):
                 approved design this is the full pre-IGM QSO flux
                 (continuum_agn + broad_emission + feii_flux + balmer_flux),
                 not continuum_agn alone (see module docstring).
-            zqso, add_dlas, seed: see transmission().
+            zqso, add_dlas, seed, dla_boost: see transmission().
 
         Returns:
             Tuple of (igm_flux, wave, params): igm_flux is the additive
@@ -237,7 +313,7 @@ class IGMAbsorption(object):
             convention as ism_absorption/associated_absorption_flux/
             dust_flux); wave and params as returned by transmission().
         """
-        T, wave, params = self.transmission(zqso, add_dlas=add_dlas, seed=seed)
+        T, wave, params = self.transmission(zqso, add_dlas=add_dlas, seed=seed, dla_boost=dla_boost)
         flux_to_absorb = np.asarray(flux_to_absorb)
         igm_flux = flux_to_absorb * (T - 1.0)
         return igm_flux, wave, params

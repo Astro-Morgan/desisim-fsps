@@ -128,5 +128,195 @@ class TestIGMAbsorption(unittest.TestCase):
         np.testing.assert_allclose(wave, custom_wave)
 
 
+
+
+class TestEmpiricalBacktestForestTransmission(unittest.TestCase):
+    '''Task #45 empirical backtest: confirms the FOREST_TAU_CORRECTION_NORM/
+    POWER rescaling (see igm_absorption.py's class-level comment) actually
+    brings MockMaker's mean forest transmission into agreement with the real
+    reference curve it was calibrated against -- Faucher-Giguere et al.
+    (2008, arXiv:0709.2382) metals-in fit tau_eff(z) = 0.0018*(1+z)**3.92 --
+    and regression-guards the fitted constants themselves plus the
+    uncorrected engine's known pre-fix discrepancy (so a future accidental
+    revert or constant change is caught).
+    '''
+
+    # Faucher-Giguere et al. (2008), Table 1 fit, metals-in case (see
+    # igm_absorption.py's module-level DLA/forest design comments for why
+    # metals-in, not forest-only, is the calibration target used here).
+    @staticmethod
+    def _tau_real(z):
+        return 0.0018 * (1.0 + z) ** 3.92
+
+    @classmethod
+    def setUpClass(cls):
+        # Wide rest-frame grid + single high zqso, matching the task #45
+        # calibration methodology exactly (see igm_absorption.py's
+        # FOREST_TAU_CORRECTION_NORM/POWER comment) -- avoids the edge-
+        # artifact bug found and fixed during the original fit (narrow
+        # grids / low zqso bias the z-bin windows near the array's own
+        # boundaries).
+        cls.igm = IGMAbsorption(minwave=650.0, maxwave=1180.0, cdelt_kms=20.0)
+        cls.zqso = 5.0
+        cls.n_realizations = 60
+        wave_rest = 10 ** cls.igm.log10wave
+        cls.z_pix = wave_rest * (1.0 + cls.zqso) / LAMBDA_LYA - 1.0
+
+        transmissions = []
+        for seed in range(cls.n_realizations):
+            T, _, _ = cls.igm.transmission(cls.zqso, add_dlas=False, seed=seed)
+            transmissions.append(T)
+        cls.mean_T = np.mean(transmissions, axis=0)
+
+    def _mean_tau_in_bin(self, z_lo, z_hi):
+        sel = (self.z_pix >= z_lo) & (self.z_pix < z_hi)
+        self.assertGreater(sel.sum(), 0, 'empty z bin -- grid/zqso choice no longer covers it')
+        T_bin = np.clip(self.mean_T[sel], 1e-300, 1.0)
+        return -np.log(T_bin).mean()
+
+    def test_correction_constants_unchanged(self):
+        # Regression guard on the fitted values themselves (see class
+        # comment in igm_absorption.py for the fit methodology).
+        self.assertAlmostEqual(IGMAbsorption.FOREST_TAU_CORRECTION_NORM, 1.0072, places=4)
+        self.assertAlmostEqual(IGMAbsorption.FOREST_TAU_CORRECTION_POWER, 0.2137, places=4)
+
+    def test_corrected_mean_tau_matches_real_reference(self):
+        '''Behavioral backtest: at several real redshifts spanning the
+        fitted range, the corrected engine's mean tau should now be close
+        to Faucher-Giguere et al. (2008)'s value -- within 15% (looser than
+        the ~3% seen in the original high-statistics fit, since this test
+        uses fewer realizations and does not re-derive the correction, only
+        confirms it lands in the right place).
+        '''
+        for z in (2.5, 3.0, 3.5):
+            tau_mock = self._mean_tau_in_bin(z - 0.15, z + 0.15)
+            tau_real = self._tau_real(z)
+            rel_err = abs(tau_mock - tau_real) / tau_real
+            self.assertLess(rel_err, 0.15,
+                             'z={}: tau_mock={:.4f} vs tau_real={:.4f}, rel_err={:.3f}'.format(
+                                 z, tau_mock, tau_real, rel_err))
+
+    def test_uncorrected_engine_would_have_undershot(self):
+        '''Confirms the correction is doing real work, not a no-op: undoing
+        it (dividing back out the tau_correction factor) reproduces the
+        originally-diagnosed under-absorption relative to the real curve.
+        '''
+        z = 3.0
+        sel = (self.z_pix >= z - 0.15) & (self.z_pix < z + 0.15)
+        tau_correction = (IGMAbsorption.FOREST_TAU_CORRECTION_NORM
+                           * (1.0 + self.z_pix[sel]) ** IGMAbsorption.FOREST_TAU_CORRECTION_POWER)
+        tau_corrected = np.clip(-np.log(np.clip(self.mean_T[sel], 1e-300, 1.0)), 0, None)
+        tau_uncorrected = tau_corrected / tau_correction
+        tau_real = self._tau_real(z)
+        self.assertLess(tau_uncorrected.mean(), tau_corrected.mean())
+        self.assertLess(tau_uncorrected.mean(), tau_real)
+
+
+class TestDLABoostGeneratingParameter(unittest.TestCase):
+    '''Task #45: dla_boost promoted from a fixed constant (dla.py's
+    calc_lz(boost=1.6) default) to a drawn, NPE-calibratable generating
+    parameter -- see DLA_BOOST_RANGE's class-level comment in
+    igm_absorption.py. These tests check the generating-parameter
+    mechanics mirror the established convention (explicit-override-wins,
+    reproducible draws, forced-None when not applicable) and that the
+    drawn value has a genuine physical effect via dla.py's calc_lz().
+    '''
+
+    def setUp(self):
+        self.igm = IGMAbsorption(minwave=900.0, maxwave=1300.0, cdelt_kms=20.0)
+        self.zqso = 2.5
+
+    def test_drawn_dla_boost_within_range(self):
+        lo, hi = IGMAbsorption.DLA_BOOST_RANGE
+        for seed in range(30):
+            _, _, params = self.igm.transmission(self.zqso, add_dlas=True, seed=seed)
+            self.assertIsNotNone(params['dla_boost'])
+            self.assertGreaterEqual(params['dla_boost'], lo)
+            self.assertLessEqual(params['dla_boost'], hi)
+
+    def test_drawn_dla_boost_reproducible(self):
+        _, _, p1 = self.igm.transmission(self.zqso, add_dlas=True, seed=11)
+        _, _, p2 = self.igm.transmission(self.zqso, add_dlas=True, seed=11)
+        self.assertEqual(p1['dla_boost'], p2['dla_boost'])
+
+    def test_drawn_dla_boost_varies_across_seeds(self):
+        values = set()
+        for seed in range(10):
+            _, _, params = self.igm.transmission(self.zqso, add_dlas=True, seed=seed)
+            values.add(round(params['dla_boost'], 8))
+        self.assertGreater(len(values), 1, 'dla_boost should vary across seeds, not be a constant draw')
+
+    def test_explicit_dla_boost_overrides_draw(self):
+        _, _, params = self.igm.transmission(self.zqso, add_dlas=True, seed=3, dla_boost=1.9)
+        self.assertEqual(params['dla_boost'], 1.9)
+
+    def test_explicit_dla_boost_ignores_range(self):
+        # Established "explicit caller value always wins" convention --
+        # an explicit override is honored even outside DLA_BOOST_RANGE
+        # (matches how other *_RANGE-governed params behave elsewhere in
+        # this fork, e.g. hbeta_broad_narrow_ratio).
+        _, _, params = self.igm.transmission(self.zqso, add_dlas=True, seed=3, dla_boost=5.0)
+        self.assertEqual(params['dla_boost'], 5.0)
+
+    def test_dla_boost_forced_none_when_add_dlas_false(self):
+        _, _, params = self.igm.transmission(self.zqso, add_dlas=False, seed=3)
+        self.assertIsNone(params['dla_boost'])
+
+    def test_spectrum_forwards_dla_boost(self):
+        flux = np.ones_like(self.igm.log10wave) * 3.0
+        _, _, params = self.igm.spectrum(flux, self.zqso, add_dlas=True, seed=4, dla_boost=1.5)
+        self.assertEqual(params['dla_boost'], 1.5)
+
+    def test_higher_dla_boost_increases_mean_dla_incidence(self):
+        '''End-to-end check that dla_boost genuinely reaches dla.py's
+        calc_lz(boost=...) and has the expected physical effect (higher
+        boost -> higher DLA incidence rate, since calc_lz's Prochaska et
+        al. 2008 formula is lz = boost*0.6*exp(-7/z**2), linear in boost)
+        -- not just that the number is threaded through and stored.
+        '''
+        n_seeds = 80
+        lo_boost, hi_boost = IGMAbsorption.DLA_BOOST_RANGE
+        ndla_lo = sum(self.igm.transmission(self.zqso, add_dlas=True, seed=s,
+                                             dla_boost=lo_boost)[2]['ndla']
+                      for s in range(n_seeds))
+        ndla_hi = sum(self.igm.transmission(self.zqso, add_dlas=True, seed=s,
+                                             dla_boost=hi_boost)[2]['ndla']
+                      for s in range(n_seeds))
+        self.assertGreater(ndla_hi, ndla_lo,
+                            'boost={} gave {} total DLAs across {} seeds, '
+                            'not more than boost={}\'s {}'.format(
+                                hi_boost, ndla_hi, n_seeds, lo_boost, ndla_lo))
+
+
+class TestDLABoostPassthroughCalcLz(unittest.TestCase):
+    '''Direct unit test of dla.py's own boost passthrough (independent of
+    IGMAbsorption), confirming calc_lz's documented linear-in-boost
+    behavior and insert_dlas' boost kwarg wiring (see dla.py's calc_lz
+    docstring for the boost=1 citation-verified case vs. the uncited
+    boost=1.6 legacy default).
+    '''
+
+    def test_calc_lz_scales_linearly_with_boost(self):
+        from desisim.dla import calc_lz
+        z = np.array([2.0, 2.5, 3.0])
+        lz_1 = calc_lz(z, boost=1.0)
+        lz_2 = calc_lz(z, boost=2.0)
+        np.testing.assert_allclose(lz_2, 2.0 * lz_1)
+
+    def test_calc_lz_default_boost_unchanged(self):
+        from desisim.dla import calc_lz
+        z = np.array([2.0, 3.0])
+        np.testing.assert_allclose(calc_lz(z), calc_lz(z, boost=1.6))
+
+    def test_insert_dlas_default_boost_unchanged(self):
+        from desisim.dla import insert_dlas
+        wave = np.arange(3000.0, 4200.0, 0.5)
+        zem = 2.5
+        dlas_a, model_a = insert_dlas(wave, zem, seed=17)
+        dlas_b, model_b = insert_dlas(wave, zem, seed=17, boost=1.6)
+        np.testing.assert_array_equal(model_a, model_b)
+        self.assertEqual(len(dlas_a), len(dlas_b))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,9 +1,0 @@
-#!/usr/bin/env python
-
-"""
-Generate galaxy spectra, with optional transients.
-"""
-
-import sys
-from desisim.scripts.quicktransients import main
-sys.exit(main())

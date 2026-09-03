@@ -13,6 +13,7 @@ dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 torch = ["torch"]
+dev = ["pytest"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

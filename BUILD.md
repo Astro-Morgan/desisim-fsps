@@ -32,13 +32,22 @@ once the first such module lands.
 Mirroring the old `SETUP.md`'s own honesty about not guessing at
 environment specifics: nothing about NERSC, FSPS, simqso, or any other
 DESI-specific data product or environment is documented here, because no
-module in this refactor currently depends on any of them -- this is a
-bootstrap skeleton (`src/demiurge/__init__.py` only). These sections get
-written for real once a module that actually needs them is ported (charter
-Sec. 3.2/3.3/3.5), not guessed at in advance.
+physics-generation module in this refactor currently depends on any of them.
+These sections get written for real once a module that actually needs them
+is ported (charter Sec. 3.2/3.3/3.5), not guessed at in advance.
 
 ## Testing
 
-No test suite exists yet. Once physics modules land, this section
-documents how to run it, and the charter's per-push testing gate (Sec. 4)
-applies from the first real module onward.
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+`dev` pulls in `pytest` (test-only, not a runtime dependency -- kept out of
+`requirements.txt`). Tests live under `tests/`, mirroring the `src/demiurge/`
+package layout. The charter's per-push testing gate (Sec. 4) applies: every
+push runs this first.
+
+Current coverage: `demiurge.rng` (reproducible/independent child RNG streams)
+and `demiurge.parameters` (the NPE-parameter registry, its distribution
+families, and `PriorSampler`).

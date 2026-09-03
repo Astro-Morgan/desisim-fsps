@@ -6,10 +6,14 @@ DESI-like spectra, decomposed by construction into named additive channels
 signal a downstream neural decomposer needs, since that decomposition isn't
 observable for real spectra. Part of the DESI-Flow framework.
 
-**Current state: bootstrap skeleton.** No physics modules have been ported
-yet -- see the `refactor` branch's own history for progress. This
-description will be extended as real modules land; it does not describe
-anything aspirational.
+**Current state: NPE-parameter registry.** No physics-generation modules have
+been ported yet, but `demiurge.parameters` catalogs every Tier 2/3 stochastic
+parameter from the prior implementation (116 entries: default prior
+distribution, citation where one exists, physical/non-physical tag), and
+`demiurge.parameters.PriorSampler` draws from it. `demiurge.rng` provides
+reproducible, independent RNG streams for the pipeline. See the `refactor`
+branch's own history for progress. This description will be extended as real
+modules land; it does not describe anything aspirational.
 
 ## Relationship to `main`
 

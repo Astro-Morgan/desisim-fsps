@@ -1,0 +1,5 @@
+# Minimal by design -- this file is the enforcement mechanism for the
+# refactor's numpy-first dependency-reduction goal (charter Sec. 3, 1.1).
+# Every addition here is a deliberate, reviewed decision, not an incidental
+# import that happened to work locally.
+numpy

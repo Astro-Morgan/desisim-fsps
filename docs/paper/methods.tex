@@ -1,0 +1,60 @@
+% Living methods document for `demiurge`, per the refactor charter
+% (HANDOFF3 Sec. 7): one section per additive channel, mirroring
+% `src/demiurge/`'s own module layout, updated in the SAME COMMIT as any
+% change to a citation-bearing functional form or Tier 2 default prior in
+% the code -- not a separate write-up pass done later.
+%
+% Target: AAS Journals (ApJ), AASTeX v7.0.1 (current as of 2026-09,
+% https://journals.aas.org/aastexguide/). Compile with a TeX distribution
+% that has aastex7.cls available (current TeX Live/MiKTeX, or Overleaf's
+% built-in AAS Journals template) -- the class file is not vendored in this
+% repo.
+%
+% Deliberately mostly empty right now: no demiurge channel modules have
+% been built yet (see src/demiurge/parameters/registry.py's own module
+% docstring -- same "scaffolding now, populate per real feature" discipline
+% applies here). Add a \subsection per channel alongside that channel's
+% real code, not ahead of it.
+
+\documentclass{aastex7}
+
+\shorttitle{demiurge}
+\shortauthors{TBD}
+
+\begin{document}
+
+\title{demiurge: TBD Title}
+
+% TODO: real author list/affiliations/emails once decided -- AASTeX v7
+% requires \email for every author.
+\author{TBD}
+\affiliation{TBD}
+\email{TBD}
+
+\begin{abstract}
+TBD -- written once the methods below are substantially populated, not
+before.
+\end{abstract}
+
+% TODO: Unified Astronomy Thesaurus (UAT) concept keywords, once relevant
+% (https://astrothesaurus.org/).
+% \keywords{\uat{Concept}{ID}}
+
+\section{Introduction}
+TBD.
+
+\section{Methods}
+Each subsection below corresponds to one additive channel in
+\texttt{src/demiurge/} and is added only once that channel's real code
+exists, per this document's own header note. None exist yet.
+
+% \subsection{<Channel Name>} \label{sec:<channel>}
+% Cites: see refs.bib. Mirrors src/demiurge/<channel>.py.
+
+\section{Discussion}
+TBD.
+
+\bibliography{refs}
+\bibliographystyle{aasjournal}
+
+\end{document}

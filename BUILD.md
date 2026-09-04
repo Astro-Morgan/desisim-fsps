@@ -27,14 +27,52 @@ implementation both backends are tested against. **Not implemented yet** --
 no torch-backed code exists in this skeleton. This section gets filled in
 once the first such module lands.
 
+## Optional: python-fsps (stellar population synthesis, C3K_HR + MIST)
+
+Needed for the galaxy continuum channel. **Requires WSL2 (Ubuntu) on
+Windows -- do not attempt a native-Windows build.** `python-fsps`'s own CI
+only tests Ubuntu and macOS; Windows is untested upstream and not worth
+the risk of silent breakage. On Linux/macOS directly, skip the WSL framing
+below and just follow the same steps in your native shell.
+
+```bash
+sudo apt-get install -y gfortran gcc make python3-dev   # if not already present
+export SPS_HOME=/path/to/fsps_data                       # pick a location, ~5GB
+git clone https://github.com/cconroy20/fsps.git "$SPS_HOME"
+# persist SPS_HOME for this venv (e.g. append the export line above to
+# <venv>/bin/activate) so it's set every time the venv is activated
+FFLAGS="-DC3K_LR=0 -DC3K_HR=1" pip install fsps --no-binary fsps
+```
+
+`SPS_HOME` must be set *before* installing -- the build compiles FSPS's own
+Fortran source found there, and reads its data files (isochrones, spectral
+libraries) at runtime too. C3K_HR (high-resolution) replaces the default
+C3K_LR spectral library; MIST isochrones are already FSPS's default, no
+flag needed. Verify with:
+
+```python
+import fsps
+sp = fsps.StellarPopulation(zcontinuous=1)
+sp.libraries  # -> (b'mist', b'c3k_hr')
+```
+
+Per the charter's dependency-reduction goal (Sec. 3.3): `python-fsps` is
+being kept as a real dependency for now, not vendored away -- that's
+explicitly allowed as a fallback outcome if the exercised FSPS code path
+turns out not to be cleanly separable, and is being treated as the current
+state rather than pre-judged. How this affects downstream `pip install
+demiurge` users (who won't have WSL/a Fortran toolchain set up by default)
+is an open design question, not yet resolved -- see project discussion
+before assuming an answer.
+
 ## What's NOT established yet
 
 Mirroring the old `SETUP.md`'s own honesty about not guessing at
-environment specifics: nothing about NERSC, FSPS, simqso, or any other
+environment specifics: nothing about NERSC, simqso, or any other
 DESI-specific data product or environment is documented here, because no
 physics-generation module in this refactor currently depends on any of them.
 These sections get written for real once a module that actually needs them
-is ported (charter Sec. 3.2/3.3/3.5), not guessed at in advance.
+is ported (charter Sec. 3.2/3.5), not guessed at in advance.
 
 ## Testing
 

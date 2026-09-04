@@ -3,6 +3,17 @@ GalaxyContinuum -- pure stellar-continuum spectrum for the galaxy mock path
 (the `continuum` bucket of the 3-bucket decomposition; dust attenuation is
 explicitly NOT part of this channel and is handled separately downstream,
 matching the pre-refactor convention of forcing FSPS's own dust2=0 here).
+`dust1`/`dust2` are set explicitly (not left to FSPS's own default, which
+happens to also be 0.0 but shouldn't be relied on implicitly). Verified
+directly (2026-09-04): with dust2=0, `add_dust_emission` is fully neutralized
+by FSPS's own energy-balance normalization (zero absorbed light -> zero
+re-emitted light) -- bitwise-identical spectra and no measurable time cost
+either way, so it's left at FSPS's default. `add_agb_dust_model` is NOT
+neutralized by dust2=0 (it's circumstellar dust around AGB stars, a real
+stellar-atmosphere effect, not ISM attenuation -- up to ~34% flux difference
+at some wavelengths for a 3 Gyr population) -- left at FSPS's default (True)
+as genuine stellar physics that belongs in a "pure stellar SED," not
+something dust2=0 was ever meant to suppress.
 
 Three construction paths:
 
@@ -84,7 +95,7 @@ class GalaxyContinuum:
         if imf_slopes is None:
             imf_slopes = imf_module.canonical_slopes()
 
-        sp = fsps.StellarPopulation(zcontinuous=1, sfh=0, imf_type=2)
+        sp = fsps.StellarPopulation(zcontinuous=1, sfh=0, imf_type=2, dust1=0.0, dust2=0.0)
         sp.params["logzsol"] = float(np.log10(z_absolute / imf_module.Z_SUN))
         sp.params["imf1"] = imf_slopes.imf1
         sp.params["imf2"] = imf_slopes.imf2
@@ -161,7 +172,7 @@ class GalaxyContinuum:
     @classmethod
     def _synthesize(cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, n_bins, peraa) -> "GalaxyContinuum":
         fsps = _require_fsps()
-        sp = fsps.StellarPopulation(zcontinuous=1, sfh=3, imf_type=2)
+        sp = fsps.StellarPopulation(zcontinuous=1, sfh=3, imf_type=2, dust1=0.0, dust2=0.0)
         t_obs = float(t_grid_gyr[-1])
 
         bins = _bin_sfh(t_grid_gyr, sfr_msun_per_yr, z_grid, n_bins)

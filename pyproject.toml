@@ -13,10 +13,15 @@ dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 torch = ["torch"]
-dev = ["pytest"]
+dev = ["pytest", "matplotlib"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: exercises real python-fsps calls (~15-25s each on this hardware/library combo) -- run explicitly with `-m slow`, excluded from the default `pytest` invocation with `-m 'not slow'` for fast local iteration.",
+]

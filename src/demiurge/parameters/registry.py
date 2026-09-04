@@ -105,7 +105,7 @@ _add(
         owner="galaxy_continuum.sfh",
         tier=3,
         physical=True,
-        distribution=LogUniform(1.0e8, 1.0e12),
+        distribution=LogUniform(5.0e7, 5.0e12),
         units="Msun",
         description="Total stellar mass formed by the observation epoch (integral of SFR(t)).",
         rationale="Order-of-magnitude bracket spanning the real galaxy stellar-mass-function range, not fit to a specific survey's mass function -- MAGIC.",

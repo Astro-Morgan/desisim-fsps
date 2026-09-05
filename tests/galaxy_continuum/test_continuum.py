@@ -61,7 +61,7 @@ def test_from_arrays_shared_imf_mode_uses_canonical_slopes_in_every_bin():
     t = np.linspace(0.5, 8.0, 40)
     sfr = np.ones_like(t)
     z = np.linspace(0.001, 0.01, 40)  # rising, monotonic
-    gc = GalaxyContinuum.from_arrays(t, sfr, z, imf_mode="shared", n_bins=2)
+    gc = GalaxyContinuum.from_arrays(t, sfr, z, imf_mode="shared", backend="fsps_direct", n_bins=2)
     assert all(b["imf_slopes"] == canonical_slopes() for b in gc.meta["bins"])
 
 
@@ -69,7 +69,7 @@ def test_from_arrays_dynamic_imf_mode_varies_with_bin_metallicity():
     t = np.linspace(0.5, 8.0, 40)
     sfr = np.ones_like(t)
     z = np.linspace(0.0005, 0.02, 40)  # spans well below/above solar
-    gc = GalaxyContinuum.from_arrays(t, sfr, z, imf_mode="dynamic", n_bins=2)
+    gc = GalaxyContinuum.from_arrays(t, sfr, z, imf_mode="dynamic", backend="fsps_direct", n_bins=2)
     slopes = [b["imf_slopes"] for b in gc.meta["bins"]]
     assert len(set(slopes)) > 1, "dynamic mode should not produce identical slopes across differing-Z bins"
     for s in slopes:
@@ -105,7 +105,7 @@ def test_shared_and_dynamic_imf_binned_sfh_reproduces_manual_sum():
     sfr = np.ones_like(t)
     z = np.full_like(t, 0.0142)  # constant Z -> shared and dynamic should agree exactly
 
-    gc_shared = GalaxyContinuum.from_arrays(t, sfr, z, imf_mode="shared", n_bins=2)
+    gc_shared = GalaxyContinuum.from_arrays(t, sfr, z, imf_mode="shared", backend="fsps_direct", n_bins=2)
 
     sp = raw_fsps.StellarPopulation(zcontinuous=1, sfh=3, imf_type=2)
     sp.params["logzsol"] = 0.0
@@ -127,3 +127,53 @@ def test_from_dense_basis_reproducible_given_same_seed():
     a = GalaxyContinuum.from_dense_basis(np.random.default_rng(99), t_obs_gyr=8.0, n_bins=2)
     b = GalaxyContinuum.from_dense_basis(np.random.default_rng(99), t_obs_gyr=8.0, n_bins=2)
     np.testing.assert_array_equal(a.flux, b.flux)
+
+
+def test_pretabulated_backend_is_the_default():
+    gc = GalaxyContinuum.from_dense_basis(np.random.default_rng(5), t_obs_gyr=8.0)
+    assert gc.meta["backend"] == "pretabulated"
+
+
+@pytest.mark.parametrize("imf_mode", ["shared", "dynamic"])
+def test_pretabulated_backend_agrees_with_fsps_direct_truth(imf_mode):
+    """The actual point of the whole pretabulated grid: it must reproduce
+    what fsps_direct (real FSPS, per-bin) would have produced, not just
+    "look reasonable" on its own. Loose thresholds here (not the tight
+    sub-1% numbers from the profiling benchmarks) because fsps_direct's own
+    truth uses few bins (n_bins=6) rather than the very fine n_bins=12
+    reference the grid design was actually profiled against -- this is a
+    regression/sanity gate, not a precision claim; see project history for
+    the actual measured fidelity numbers the grid's Z-resolution was chosen
+    to hit."""
+    rng_direct = np.random.default_rng(4)
+    rng_pretab = np.random.default_rng(4)
+
+    gc_direct = GalaxyContinuum.from_dense_basis(
+        rng_direct, t_obs_gyr=10.0, imf_mode=imf_mode, backend="fsps_direct", n_bins=6
+    )
+    gc_pretab = GalaxyContinuum.from_dense_basis(
+        rng_pretab, t_obs_gyr=10.0, imf_mode=imf_mode, backend="pretabulated"
+    )
+
+    mask = gc_direct.flux > 1.0e-3 * gc_direct.flux.max()
+    rel_err = np.abs(gc_pretab.flux[mask] - gc_direct.flux[mask]) / gc_direct.flux[mask]
+    rms_rel_err = np.sqrt(np.mean(rel_err**2))
+    assert rms_rel_err < 0.10, f"pretabulated vs fsps_direct RMS relative error too high: {rms_rel_err:.4f}"
+
+
+def test_pretabulated_clipping_is_confined_to_negligible_early_steps():
+    """Z(t) starts at exactly 0 for every draw (closed-box model, F(0)=0) --
+    the very first timestep(s), where formed mass is negligible, legitimately
+    clip to the grid's Z_FLOOR every time. That's expected floor behavior,
+    not the high-Z tail-safety-net case the wide grid margin (Sec.
+    scripts/build_galaxy_continuum_ssp_grid.py docstring) was built for --
+    this test checks clipping stays confined to that negligible-mass regime
+    rather than happening broadly across a draw (which would indicate the
+    grid's Z range is actually too narrow for typical draws)."""
+    rng = np.random.default_rng(4)
+    gc = GalaxyContinuum.from_dense_basis(rng, t_obs_gyr=10.0)
+    n_grid = len(gc.meta["sfh"].t_grid_gyr)
+    assert gc.meta["n_clipped_steps"] < 0.05 * n_grid, (
+        f"{gc.meta['n_clipped_steps']} of {n_grid} steps clipped -- more than the handful of "
+        f"negligible-mass early steps expected; the grid's Z range may be too narrow."
+    )

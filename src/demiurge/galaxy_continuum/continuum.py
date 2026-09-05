@@ -23,12 +23,14 @@ Three construction paths:
   nothing beyond python-fsps itself, specifically so it can be checked
   against a raw `fsps.StellarPopulation` call as a regression baseline
   (project direction, 2026-09-04: "we should be able to recover the fsps
-  baseline").
+  baseline"). Always uses `fsps_direct` -- a single-point query is already
+  cheap, and this path's whole purpose is exactness, not speed, so it never
+  routes through the interpolated pretabulated grid.
 - `from_arrays`: fully user-supplied SFR(t)/Z(t) history. Z(t) monotonicity
   is validated (raises by default; see `metallicity.validate_monotonic_z`).
   A length-1 history is degenerate and delegates to
-  `from_single_population`, so the baseline-recovery guarantee holds here
-  too, not just via the explicit constructor.
+  `from_single_population` (always exact), so the baseline-recovery
+  guarantee holds here too, not just via the explicit constructor.
 - `from_dense_basis`: the Tier-2 stochastic default (HANDOFF3 Sec. 6.1/6.4)
   -- draws SFH(t) (`sfh.draw_sfh`) and Z(t) (`metallicity.draw_metallicity`)
   from their registered priors, then synthesizes exactly like `from_arrays`.
@@ -38,11 +40,31 @@ Three construction paths:
 IMF for the whole history; "dynamic" applies
 `imf.metallicity_dependent_slopes` per time-bin (see `imf.py`'s module
 docstring for exactly what this simplified treatment does and doesn't
-capture). Metallicity itself is always binned (one representative Z per
-FSPS call) regardless of `imf_mode` -- `python-fsps` 0.5.0's
-multi-metallicity tabulated-SFH mode (`zcontinuous=3`) is unusable (see
-`imf.py`'s module docstring for the confirmed upstream bug), so "shared
-IMF" does not mean "single Z for the whole history," only "single IMF."
+capture).
+
+`backend` ("pretabulated" or "fsps_direct") also applies to both:
+`pretabulated` (the default) reconstructs the composite spectrum via fast
+numpy/torch interpolation of a precomputed FSPS grid (see
+`pretabulated.py`'s module docstring -- no FSPS calls, ~2-30ms regardless
+of resolution, requires no python-fsps/Fortran toolchain at all since the
+grid ships as package data). `fsps_direct` is the original per-time-bin
+FSPS-call implementation (`n_bins` only applies to this backend) -- slower
+(~15-25s per bin) but not dependent on the pretabulated grid's own fidelity,
+so it's kept as the always-available validation reference `pretabulated` is
+tested against, and as an option for anyone who wants results independent
+of the shipped grid's own approximations. Metallicity is always binned
+under `fsps_direct` (one representative Z per FSPS call) regardless of
+`imf_mode` -- `python-fsps` 0.5.0's multi-metallicity tabulated-SFH mode
+(`zcontinuous=3`) is unusable (see `imf.py`'s module docstring for the
+confirmed upstream bug), so "shared IMF" under `fsps_direct` does not mean
+"single Z for the whole history," only "single IMF." `pretabulated` has no
+such limitation -- it interpolates Z continuously per timestep.
+
+Dependency note: python-fsps (and therefore a Fortran compiler; WSL2 on
+Windows, see BUILD.md) is only required for `from_single_population`,
+`backend="fsps_direct"`, or building/rebuilding the pretabulated grid
+(`scripts/build_galaxy_continuum_ssp_grid.py`) -- `backend="pretabulated"`
+needs neither at runtime.
 """
 from __future__ import annotations
 
@@ -53,6 +75,7 @@ import numpy as np
 
 from . import imf as imf_module
 from . import metallicity as metallicity_module
+from . import pretabulated as pretabulated_module
 from . import sfh as sfh_module
 from ..parameters.samplers import ParameterSampler, PriorSampler
 
@@ -65,10 +88,21 @@ except ImportError:  # pragma: no cover -- exercised only in environments withou
 def _require_fsps():
     if _fsps is None:
         raise ImportError(
-            "python-fsps is required for GalaxyContinuum but is not installed -- see BUILD.md "
-            "(requires a Fortran compiler; WSL2 on Windows, native on Linux/macOS)."
+            "python-fsps is required for this GalaxyContinuum path but is not installed -- see "
+            "BUILD.md (requires a Fortran compiler; WSL2 on Windows, native on Linux/macOS). "
+            "backend='pretabulated' does not need python-fsps at all."
         )
     return _fsps
+
+
+_C_ANGSTROM_PER_S = 2.99792458e18
+
+
+def _fnu_to_flambda(wave_angstrom: np.ndarray, flux_fnu: np.ndarray) -> np.ndarray:
+    """f_lambda = f_nu * c / lambda**2 -- standard conversion, used to honor
+    `peraa=True` for the pretabulated backend (its grid is stored in f_nu,
+    matching FSPS's own `peraa=False` convention)."""
+    return flux_fnu * _C_ANGSTROM_PER_S / wave_angstrom**2
 
 
 @dataclass(frozen=True)
@@ -116,6 +150,7 @@ class GalaxyContinuum:
         z_grid,
         *,
         imf_mode: str = "shared",
+        backend: str = "pretabulated",
         n_bins: int = 8,
         z_monotonic_enforce: bool = False,
         peraa: bool = False,
@@ -137,7 +172,9 @@ class GalaxyContinuum:
             )
 
         z_grid = metallicity_module.validate_monotonic_z(z_grid, enforce=z_monotonic_enforce)
-        return cls._synthesize(t_grid_gyr, sfr_msun_per_yr, z_grid, imf_mode=imf_mode, n_bins=n_bins, peraa=peraa)
+        return cls._synthesize(
+            t_grid_gyr, sfr_msun_per_yr, z_grid, imf_mode=imf_mode, backend=backend, n_bins=n_bins, peraa=peraa
+        )
 
     @classmethod
     def from_dense_basis(
@@ -147,6 +184,7 @@ class GalaxyContinuum:
         *,
         sampler: Optional[ParameterSampler] = None,
         imf_mode: str = "dynamic",
+        backend: str = "pretabulated",
         n_bins: int = 8,
         n_grid: int = 200,
         peraa: bool = False,
@@ -162,6 +200,7 @@ class GalaxyContinuum:
             sfh_result.sfr_msun_per_yr,
             z_result.z_grid,
             imf_mode=imf_mode,
+            backend=backend,
             n_bins=n_bins,
             peraa=peraa,
         )
@@ -170,7 +209,35 @@ class GalaxyContinuum:
         return result
 
     @classmethod
-    def _synthesize(cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, n_bins, peraa) -> "GalaxyContinuum":
+    def _synthesize(cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, backend, n_bins, peraa) -> "GalaxyContinuum":
+        if backend not in ("pretabulated", "fsps_direct"):
+            raise ValueError(f"backend must be 'pretabulated' or 'fsps_direct', got {backend!r}")
+        if backend == "pretabulated":
+            return cls._synthesize_pretabulated(t_grid_gyr, sfr_msun_per_yr, z_grid, imf_mode=imf_mode, peraa=peraa)
+        return cls._synthesize_fsps_direct(
+            t_grid_gyr, sfr_msun_per_yr, z_grid, imf_mode=imf_mode, n_bins=n_bins, peraa=peraa
+        )
+
+    @classmethod
+    def _synthesize_pretabulated(cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, peraa) -> "GalaxyContinuum":
+        t_obs = float(t_grid_gyr[-1])
+        result = pretabulated_module.synthesize(
+            t_grid_gyr, sfr_msun_per_yr, z_grid, t_obs, imf_mode=imf_mode, backend="auto"
+        )
+        flux = _fnu_to_flambda(result.wave, result.flux) if peraa else result.flux
+        return cls(
+            wave=result.wave,
+            flux=flux,
+            meta=dict(
+                imf_mode=imf_mode,
+                backend="pretabulated",
+                interpolation_backend=result.backend,
+                n_clipped_steps=result.n_clipped_steps,
+            ),
+        )
+
+    @classmethod
+    def _synthesize_fsps_direct(cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, n_bins, peraa) -> "GalaxyContinuum":
         fsps = _require_fsps()
         sp = fsps.StellarPopulation(zcontinuous=1, sfh=3, imf_type=2, dust1=0.0, dust2=0.0)
         t_obs = float(t_grid_gyr[-1])
@@ -199,7 +266,11 @@ class GalaxyContinuum:
             total_flux = total_flux + f
             bin_meta.append(dict(mean_z=mean_z, imf_slopes=imf_slopes, mass_msun=float(segment_sfr.sum())))
 
-        return cls(wave=wave, flux=total_flux, meta=dict(imf_mode=imf_mode, n_bins=n_bins, bins=bin_meta))
+        return cls(
+            wave=wave,
+            flux=total_flux,
+            meta=dict(imf_mode=imf_mode, backend="fsps_direct", n_bins=n_bins, bins=bin_meta),
+        )
 
 
 def _bin_sfh(t_grid: np.ndarray, sfr: np.ndarray, z_grid: np.ndarray, n_bins: int):

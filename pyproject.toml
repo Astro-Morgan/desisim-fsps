@@ -21,6 +21,14 @@ dependencies = { file = ["requirements.txt"] }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Ships the pretabulated galaxy-continuum SSP grid (see
+# scripts/build_galaxy_continuum_ssp_grid.py) as package data -- without
+# this, a real (non-editable) `pip install demiurge` would silently omit
+# these files even though local editable-install dev testing can still see
+# them directly on the source tree.
+demiurge = ["galaxy_continuum/data/*.npy", "galaxy_continuum/data/*.json"]
+
 [tool.pytest.ini_options]
 markers = [
     "slow: exercises real python-fsps calls (~15-25s each on this hardware/library combo) -- run explicitly with `-m slow`, excluded from the default `pytest` invocation with `-m 'not slow'` for fast local iteration.",

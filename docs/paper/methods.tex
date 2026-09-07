@@ -46,10 +46,128 @@ TBD.
 \section{Methods}
 Each subsection below corresponds to one additive channel in
 \texttt{src/demiurge/} and is added only once that channel's real code
-exists, per this document's own header note. None exist yet.
+exists, per this document's own header note.
 
-% \subsection{<Channel Name>} \label{sec:<channel>}
-% Cites: see refs.bib. Mirrors src/demiurge/<channel>.py.
+\subsection{Galaxy Continuum} \label{sec:galaxy-continuum}
+Mirrors \texttt{src/demiurge/galaxy\_continuum/}. Produces the pure stellar
+continuum for the galaxy mock path -- the \texttt{continuum} bucket's main
+content. Dust attenuation is explicitly excluded from this channel
+(\texttt{dust1}=\texttt{dust2}=0 in every FSPS call); it is the
+responsibility of a separate, not-yet-built channel, following the 3-bucket
+decomposition's own scope-separation convention.
+
+\subsubsection{Star Formation History} \label{sec:sfh}
+The star-formation history SFR($t$) is generated non-parametrically,
+following the Dense Basis method of \citet{IyerGawiser2017} and
+\citet{Iyer2019}. Three stellar-mass-formation-time quantiles
+($t_{25}$, $t_{50}$, $t_{75}$, i.e.\ the lookback times at which 25\%,
+50\%, and 75\% of the galaxy's total stellar mass has formed) are drawn
+from a Dirichlet prior over the four time-gaps they divide $[0, t_{\rm
+obs}]$ into (symmetric, concentration $\alpha=2$; inspired by, but not
+independently verified against, the $\alpha=1$ per-bin sSFR-fraction prior
+of \citet{IglesiasNavarro2024}, who apply a closely related Dense-Basis-
+based method to simulation-based inference of SFHs from DESI-like spectra).
+A Gaussian Process with a Mat\'ern-3/2 kernel is then conditioned to pass
+exactly through these constraints (plus the fixed endpoints $F(0)=0$,
+$F(t_{\rm obs})=1$) in cumulative-stellar-mass-fraction-vs-time space,
+following \citet{Iyer2019}'s Section 2.1 method; SFR($t$) is obtained by
+numerically differentiating the reconstructed curve, clipped non-negative
+and rescaled to conserve the drawn total stellar mass exactly.
+
+Two implementation departures from \citet{Iyer2019}, adopted for simplicity
+(\texttt{sfh.py}'s module docstring): the reported stochasticity is the
+Gaussian Process posterior \emph{mean} through randomly-drawn quantile
+constraints, not a draw from the full posterior; and the smoothness/
+burstiness length-scale hyperparameter's default range is not independently
+verified against \citeauthor{Iyer2019}'s own calibrated value.
+
+\subsubsection{Metallicity History} \label{sec:metallicity}
+Rather than an independent free function of time, the metallicity history
+$Z(t)$ is tied directly to the star formation history via the classical
+closed-box chemical evolution relation of \citet{SearleSargent1972}:
+\begin{equation}
+    Z(t) = y \, \ln\left(\frac{1}{\mu(t)}\right), \qquad
+    \mu(t) = 1 - \epsilon \, F(t),
+\end{equation}
+where $y$ is an effective nucleosynthetic yield, $\epsilon$ is a star-
+formation efficiency (the fraction of the initial gas reservoir ultimately
+locked into stars by $t_{\rm obs}$), and $F(t)$ is the same cumulative
+stellar-mass fraction from Section~\ref{sec:sfh}. $Z(t)$ is monotonically
+non-decreasing by construction. This is a deliberate first-pass
+simplification: a more complete inflow/outflow-aware, SFH-regulated
+chemical evolution model exists \citep{YinShenHao2023} but requires
+machinery (a Kennicutt--Schmidt law, mass-loading-factor-parameterized
+outflows) well beyond this pass's scope.
+
+\subsubsection{Initial Mass Function} \label{sec:imf}
+The full theory of a time-varying, galaxy-wide stellar initial mass
+function (the Integrated Galaxy-wide IMF, IGIMF: \citealt{KroupaWeidner2003};
+modern formulation \citealt{Jerabkova2018}) derives the galaxy-wide IMF by
+integrating a per-embedded-cluster stellar IMF against an embedded-cluster
+mass function whose slope depends on the instantaneous star-formation rate,
+with the maximum stellar mass per cluster set by a transcendental
+mass-normalization condition. This is deliberately \emph{not} implemented
+here, in favor of a much simpler treatment prioritizing a working,
+observationally-testable channel over complete IMF physics.
+
+What \emph{is} implemented is the metallicity-dependent shift of the
+canonical \citet{Kroupa2001} IMF's low-mass (0.08--0.5~$M_\odot$) and
+intermediate-mass (0.5--1~$M_\odot$) power-law slopes,
+\begin{equation}
+    \alpha_{1,2}(Z) = \alpha_{1,2}^{\rm canonical} + 0.5\,[M/H],
+\end{equation}
+with $[M/H] = \log_{10}(Z/Z_\odot)$ (using $Z_\odot = 0.0142$,
+\citealt{Asplund2009}, matching the MIST isochrones used throughout),
+$\alpha_1^{\rm canonical}=1.3$, $\alpha_2^{\rm canonical}=2.3$
+\citep{Kroupa2001}. This relation was verified directly against the source
+code of \texttt{galIMF} \citep{YanJerabkovaKroupa2017,
+YanJerabkovaKroupaVazdekis2019}, the public reference implementation of the
+IGIMF framework, rather than inferred from the papers' text alone. The
+high-mass slope $\alpha_3$ is held fixed at its canonical value (2.3)
+regardless of $Z$ or SFR in this implementation -- the SFR-driven,
+cluster-mass-function-integration-dependent behavior IGIMF theory predicts
+is not captured. A fuller physical treatment, deriving the IMF's
+characteristic mass from gas thermodynamics (dust-gas coupling, metal-line
+cooling, radiative feedback) rather than an empirical SFR/$Z$ scaling
+\citep{ShardaKrumholz2022}, and potentially incorporating AGN radiative
+feedback as an additional regulating mechanism (no literature precedent
+identified for the latter -- would be a genuine extension of this project's
+own, not a citation), is deferred future work.
+
+\subsubsection{Spectral Synthesis}
+Given SFR($t$), $Z(t)$, and (in the ``dynamic'' IMF mode) $\alpha_{1,2}(Z(t))$
+from the sections above, the composite stellar spectrum is synthesized via
+the Flexible Stellar Population Synthesis code \citep[FSPS;][]{Conroy2009,
+Conroy2010}, using the MIST isochrones and the high-resolution C3K
+spectral library. Two numerically distinct implementations are provided,
+verified to agree (root-mean-square relative flux deviation
+$\lesssim$ a few percent on held-out draws; see \texttt{demiurge}'s test
+suite):
+
+\begin{itemize}
+    \item \textbf{fsps\_direct}: the star-formation history is split into
+    several contiguous time segments, each assigned its own
+    SFR-weighted mean metallicity (and, in dynamic mode, IMF slopes); FSPS
+    is called once per segment via its tabulated-SFH mode, and the
+    resulting spectra are summed (valid since stellar population spectra
+    are linear in formed mass at fixed age, metallicity, and IMF). This is
+    the slower (order 10--25~s per FSPS call) but always-available
+    implementation, used as the validation reference for the alternative
+    below.
+    \item \textbf{pretabulated} (default): exploits the empirical finding
+    that FSPS caches its full native age-grid response for a given
+    (metallicity, IMF) setting on first evaluation, making subsequent
+    age queries at that same setting orders of magnitude faster than a new
+    setting. A modest, log-spaced grid of FSPS's full age response at
+    fixed metallicity values (log-spaced: empirically substantially more
+    accurate per grid point than linear spacing, since realized $Z(t)$
+    histories spend most of their dynamic range at low $Z$) is
+    precomputed once, offline, and shipped as static data; spectra are
+    then reconstructed via bilinear interpolation (in log-age and log-$Z$)
+    of that grid, implemented in both NumPy and PyTorch (auto-detecting
+    CUDA), with no further calls to FSPS. This reduces per-object synthesis
+    time from order 10~s to order 1--10~ms.
+\end{itemize}
 
 \section{Discussion}
 TBD.

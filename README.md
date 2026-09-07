@@ -31,7 +31,12 @@ aspirational.
 Citations and physics rationale accumulate alongside the code in
 [`docs/paper/methods.tex`](docs/paper/methods.tex) +
 [`docs/paper/refs.bib`](docs/paper/refs.bib) (AASTeX v7, ApJ-targeted) --
-also currently just scaffolding.
+the galaxy continuum channel's Methods subsection and its 14 references are
+the first real content; every citation was independently verified via live
+lookup (ADS/journal/arXiv/the cited code repo), not transcribed from
+memory. Not yet compiled against a real LaTeX toolchain in this environment
+-- checked by hand for balanced braces/citation-key consistency instead;
+worth a real compile pass before this is ever submitted anywhere.
 
 ## Relationship to `main`
 

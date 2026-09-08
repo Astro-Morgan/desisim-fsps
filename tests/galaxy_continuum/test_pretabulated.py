@@ -13,6 +13,7 @@ from demiurge.galaxy_continuum.pretabulated import (
     _bilinear_indices_weights,
     _reconstruct_numpy,
     synthesize,
+    synthesize_batch,
 )
 
 try:
@@ -177,3 +178,74 @@ def test_torch_backend_raises_when_torch_unavailable(monkeypatch):
     monkeypatch.setattr("demiurge.galaxy_continuum.pretabulated.load_grid", lambda imf_mode: grid)
     with pytest.raises(ImportError):
         synthesize([0, 1], [1, 1], [0.01, 0.01], t_obs_gyr=1.0, imf_mode="test", backend="torch")
+
+
+# ---------------------------------------------------------------------------
+# synthesize_batch()
+# ---------------------------------------------------------------------------
+def _random_draw(rng, grid, n_steps=20):
+    t_grid = np.sort(rng.uniform(0.0, 1.0, n_steps))
+    sfr = rng.uniform(0.1, 1.0, n_steps)
+    z_grid_vals = np.exp(rng.uniform(np.log(grid.z_grid[0]), np.log(grid.z_grid[-1]), n_steps))
+    return t_grid, sfr, z_grid_vals
+
+
+def test_synthesize_batch_matches_looped_single_calls_numpy(monkeypatch):
+    grid = _make_synthetic_grid(n_z=5, n_age=6, n_wave=8)
+    monkeypatch.setattr("demiurge.galaxy_continuum.pretabulated.load_grid", lambda imf_mode: grid)
+
+    rng = np.random.default_rng(1)
+    n_mocks = 4
+    draws = [_random_draw(rng, grid) for _ in range(n_mocks)]
+    t_obs_per_mock = np.array([1.0, 1.2, 0.8, 1.5])
+
+    looped = np.stack(
+        [
+            synthesize(t, s, z, t_obs_gyr=float(t_obs_per_mock[i]), imf_mode="test", backend="numpy").flux
+            for i, (t, s, z) in enumerate(draws)
+        ]
+    )
+    batched = synthesize_batch(
+        np.stack([d[0] for d in draws]),
+        np.stack([d[1] for d in draws]),
+        np.stack([d[2] for d in draws]),
+        t_obs_per_mock,
+        imf_mode="test",
+        backend="numpy",
+    )
+    assert batched.flux.shape == (n_mocks, 8)
+    np.testing.assert_allclose(batched.flux, looped, rtol=1e-8)
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed")
+def test_synthesize_batch_torch_matches_numpy(monkeypatch):
+    grid = _make_synthetic_grid(n_z=5, n_age=6, n_wave=8)
+    monkeypatch.setattr("demiurge.galaxy_continuum.pretabulated.load_grid", lambda imf_mode: grid)
+
+    rng = np.random.default_rng(2)
+    n_mocks = 3
+    draws = [_random_draw(rng, grid) for _ in range(n_mocks)]
+    t_obs_per_mock = np.array([1.0, 0.9, 1.3])
+    t_batch = np.stack([d[0] for d in draws])
+    sfr_batch = np.stack([d[1] for d in draws])
+    z_batch = np.stack([d[2] for d in draws])
+
+    numpy_result = synthesize_batch(t_batch, sfr_batch, z_batch, t_obs_per_mock, imf_mode="test", backend="numpy")
+    torch_result = synthesize_batch(t_batch, sfr_batch, z_batch, t_obs_per_mock, imf_mode="test", backend="torch")
+
+    np.testing.assert_allclose(numpy_result.flux, torch_result.flux, rtol=1e-4, atol=1e-6)
+
+
+def test_synthesize_batch_reports_per_mock_clipping(monkeypatch):
+    grid = _make_synthetic_grid()
+    monkeypatch.setattr("demiurge.galaxy_continuum.pretabulated.load_grid", lambda imf_mode: grid)
+
+    t_batch = np.tile(np.linspace(0.0, 1.0, 5), (2, 1))
+    sfr_batch = np.ones((2, 5))
+    z_batch = np.stack([np.full(5, grid.z_grid[1]), np.full(5, 100.0)])  # mock 0 in-range, mock 1 way out
+    t_obs = np.array([1.0, 1.0])
+
+    result = synthesize_batch(t_batch, sfr_batch, z_batch, t_obs, imf_mode="test", backend="numpy")
+    assert result.n_clipped_steps.shape == (2,)
+    assert result.n_clipped_steps[0] == 0
+    assert result.n_clipped_steps[1] == 5

@@ -39,6 +39,23 @@ Every quantity here is validated against `fsps_direct` (the ground truth)
 in `tests/galaxy_continuum/test_pretabulated.py` -- this module is not a
 substitute for understanding whether `fsps_direct` itself is correct, only
 a fast reconstruction of what it would have produced.
+
+**Batched generation** (`synthesize_batch`): a single `synthesize()` call is
+already ~2-30ms, but generating a real NPE-training set (thousands to
+millions of mocks) at that per-call cost still means looping in Python,
+paying per-call dispatch/transfer overhead N times. `synthesize_batch`
+instead interpolates many mocks' worth of (SFR(t), Z(t)) draws in one
+vectorized tensor op -- the same bilinear-interpolation math, with an added
+leading batch axis. Requires all mocks in a batch to share the same
+time-grid length (true by construction for `sfh.draw_sfh`'s fixed `n_grid`)
+-- `t_obs_gyr` may still vary per mock. Measured speedup at the whole-
+`GalaxyContinuum.from_dense_basis_batch` level (2026-09-08, N=50 mocks):
+~1.7x, not orders of magnitude -- because only the synthesis step is
+batched, not the SFH/metallicity *draw* step (still a Python loop of cheap
+per-mock NumPy calls), which now dominates the batched path's total time
+since synthesis itself is already so fast. Batching the draw step too is
+the natural next optimization if throughput at real training-set scale
+(not yet attempted) turns out to need it -- not done here.
 """
 from __future__ import annotations
 
@@ -238,4 +255,102 @@ def _reconstruct_torch(grid: SSPGrid, logage_per_step, logz_per_step, mass_per_s
         + wz_t * wa_t * f_z1a1
     )
     composite = torch.sum(per_step_flux * mass_t, dim=0)
+    return composite.detach().cpu().numpy().astype(np.float64)
+
+
+@dataclass(frozen=True)
+class BatchSynthesisResult:
+    wave: np.ndarray  # (n_wave,)
+    flux: np.ndarray  # (n_mocks, n_wave)
+    n_clipped_steps: np.ndarray  # (n_mocks,)
+    backend: str
+
+
+def synthesize_batch(
+    t_grid_gyr_batch,
+    sfr_msun_per_yr_batch,
+    z_grid_absolute_batch,
+    t_obs_gyr_batch,
+    *,
+    imf_mode: str = "dynamic",
+    backend: str = "auto",
+) -> BatchSynthesisResult:
+    """Batched version of `synthesize`: interpolates many mocks' worth of
+    (SFR(t), Z(t)) draws in one vectorized call rather than looping. All
+    three `*_batch` arrays must be shape (n_mocks, n_steps) -- same time-grid
+    *length* across the batch (true by construction for `sfh.draw_sfh`'s
+    fixed `n_grid`), though each mock's own `t_grid`/`t_obs` values may
+    differ. `t_obs_gyr_batch` is shape (n_mocks,).
+    """
+    grid = load_grid(imf_mode)
+    resolved = _resolve_backend(backend)
+
+    t_grid_gyr_batch = np.asarray(t_grid_gyr_batch, dtype=np.float64)
+    sfr_msun_per_yr_batch = np.asarray(sfr_msun_per_yr_batch, dtype=np.float64)
+    z_grid_absolute_batch = np.asarray(z_grid_absolute_batch, dtype=np.float64)
+    t_obs_gyr_batch = np.asarray(t_obs_gyr_batch, dtype=np.float64)
+
+    age_floor_gyr = 10.0**grid.age_logyr_min / 1.0e9
+    age_gyr_per_step = np.clip(t_obs_gyr_batch[:, None] - t_grid_gyr_batch, age_floor_gyr, None)
+    logage_per_step = np.log10(age_gyr_per_step * 1.0e9)
+
+    z_clipped = np.clip(z_grid_absolute_batch, grid.z_grid[0], grid.z_grid[-1])
+    n_clipped_steps = np.sum(z_clipped != z_grid_absolute_batch, axis=1)
+    logz_per_step = np.log10(z_clipped)
+
+    mass_per_step = sfr_msun_per_yr_batch * np.gradient(t_grid_gyr_batch, axis=1) * 1.0e9
+
+    if resolved == "torch":
+        flux = _reconstruct_torch_batch(grid, logage_per_step, logz_per_step, mass_per_step)
+    else:
+        flux = _reconstruct_numpy_batch(grid, logage_per_step, logz_per_step, mass_per_step)
+
+    return BatchSynthesisResult(wave=grid.wave, flux=flux, n_clipped_steps=n_clipped_steps, backend=resolved)
+
+
+def _reconstruct_numpy_batch(grid: SSPGrid, logage_batch, logz_batch, mass_batch) -> np.ndarray:
+    """Same math as `_reconstruct_numpy`, with a leading (n_mocks,) batch
+    axis on every per-step quantity; sums over the steps axis (1), not the
+    mocks axis (0)."""
+    a0, a1, wa = _bilinear_indices_weights(logage_batch, grid.age_logyr_min, grid.age_logyr_max, grid.n_age)
+    z0, z1, wz = _bilinear_indices_weights(logz_batch, grid.logz_grid[0], grid.logz_grid[-1], len(grid.z_grid))
+
+    data = np.asarray(grid.data)
+    f_z0a0 = data[z0, a0]  # (n_mocks, n_steps, n_wave)
+    f_z0a1 = data[z0, a1]
+    f_z1a0 = data[z1, a0]
+    f_z1a1 = data[z1, a1]
+
+    wa_ = wa[..., None]
+    wz_ = wz[..., None]
+    per_step_flux = (
+        (1 - wz_) * (1 - wa_) * f_z0a0
+        + (1 - wz_) * wa_ * f_z0a1
+        + wz_ * (1 - wa_) * f_z1a0
+        + wz_ * wa_ * f_z1a1
+    )
+    return np.sum(per_step_flux * mass_batch[..., None], axis=1)
+
+
+def _reconstruct_torch_batch(grid: SSPGrid, logage_batch, logz_batch, mass_batch) -> np.ndarray:
+    device = _torch_device()
+    a0, a1, wa = _bilinear_indices_weights(logage_batch, grid.age_logyr_min, grid.age_logyr_max, grid.n_age)
+    z0, z1, wz = _bilinear_indices_weights(logz_batch, grid.logz_grid[0], grid.logz_grid[-1], len(grid.z_grid))
+
+    data = grid.data
+    f_z0a0 = torch.as_tensor(data[z0, a0], dtype=torch.float32, device=device)
+    f_z0a1 = torch.as_tensor(data[z0, a1], dtype=torch.float32, device=device)
+    f_z1a0 = torch.as_tensor(data[z1, a0], dtype=torch.float32, device=device)
+    f_z1a1 = torch.as_tensor(data[z1, a1], dtype=torch.float32, device=device)
+    wa_t = torch.as_tensor(wa, dtype=torch.float32, device=device).unsqueeze(-1)
+    wz_t = torch.as_tensor(wz, dtype=torch.float32, device=device).unsqueeze(-1)
+    mass_t = torch.as_tensor(mass_batch, dtype=torch.float32, device=device).unsqueeze(-1)
+
+    per_step_flux = (
+        (1 - wz_t) * (1 - wa_t) * f_z0a0
+        + (1 - wz_t) * wa_t * f_z0a1
+        + wz_t * (1 - wa_t) * f_z1a0
+        + wz_t * wa_t * f_z1a1
+    )
+    composite = torch.sum(per_step_flux * mass_t, dim=1)
     return composite.detach().cpu().numpy().astype(np.float64)

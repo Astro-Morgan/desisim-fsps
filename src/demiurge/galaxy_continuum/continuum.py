@@ -209,6 +209,65 @@ class GalaxyContinuum:
         return result
 
     @classmethod
+    def from_dense_basis_batch(
+        cls,
+        rng: np.random.Generator,
+        t_obs_gyr,
+        n_mocks: int,
+        *,
+        sampler: Optional[ParameterSampler] = None,
+        imf_mode: str = "dynamic",
+        n_grid: int = 200,
+        peraa: bool = False,
+    ) -> list["GalaxyContinuum"]:
+        """Batched version of `from_dense_basis`: draws `n_mocks` independent
+        SFH(t)/Z(t) realizations (the draw step itself is cheap pure-NumPy
+        work, not batched) and synthesizes all of them in one vectorized
+        `pretabulated.synthesize_batch` call rather than `n_mocks` separate
+        `synthesize` calls -- always uses the pretabulated backend (batching
+        `fsps_direct` would still mean `n_mocks * n_bins` real FSPS calls, no
+        benefit). `t_obs_gyr` may be a single float (shared across all mocks)
+        or a length-`n_mocks` sequence (per-mock, e.g. drawn from a redshift
+        distribution upstream of this call).
+        """
+        if sampler is None:
+            sampler = PriorSampler()
+        t_obs_per_mock = np.broadcast_to(np.asarray(t_obs_gyr, dtype=float), (n_mocks,))
+
+        sfh_results = []
+        z_results = []
+        for i in range(n_mocks):
+            sfh_result = sfh_module.draw_sfh(rng, float(t_obs_per_mock[i]), sampler=sampler, n_grid=n_grid)
+            z_result = metallicity_module.draw_metallicity(rng, sfh_result.cumulative_mass_fraction, sampler=sampler)
+            sfh_results.append(sfh_result)
+            z_results.append(z_result)
+
+        t_grid_batch = np.stack([r.t_grid_gyr for r in sfh_results])
+        sfr_batch = np.stack([r.sfr_msun_per_yr for r in sfh_results])
+        z_batch = np.stack([r.z_grid for r in z_results])
+
+        batch_result = pretabulated_module.synthesize_batch(
+            t_grid_batch, sfr_batch, z_batch, t_obs_per_mock, imf_mode=imf_mode, backend="auto"
+        )
+        flux_batch = _fnu_to_flambda(batch_result.wave, batch_result.flux) if peraa else batch_result.flux
+
+        return [
+            cls(
+                wave=batch_result.wave,
+                flux=flux_batch[i],
+                meta=dict(
+                    imf_mode=imf_mode,
+                    backend="pretabulated",
+                    interpolation_backend=batch_result.backend,
+                    n_clipped_steps=int(batch_result.n_clipped_steps[i]),
+                    sfh=sfh_results[i],
+                    metallicity=z_results[i],
+                ),
+            )
+            for i in range(n_mocks)
+        ]
+
+    @classmethod
     def _synthesize(cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, backend, n_bins, peraa) -> "GalaxyContinuum":
         if backend not in ("pretabulated", "fsps_direct"):
             raise ValueError(f"backend must be 'pretabulated' or 'fsps_direct', got {backend!r}")

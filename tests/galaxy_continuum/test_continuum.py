@@ -177,3 +177,34 @@ def test_pretabulated_clipping_is_confined_to_negligible_early_steps():
         f"{gc.meta['n_clipped_steps']} of {n_grid} steps clipped -- more than the handful of "
         f"negligible-mass early steps expected; the grid's Z range may be too narrow."
     )
+
+
+def test_from_dense_basis_batch_matches_looped_individual_calls():
+    """The batched path must reproduce exactly what n_mocks separate
+    from_dense_basis calls -- drawing from the SAME rng stream in the same
+    order -- would have produced individually, against the real shipped
+    grid, not just a synthetic one (test_pretabulated.py covers the
+    synthetic-grid version of this same guarantee)."""
+    n_mocks = 3
+    t_obs = 9.0
+
+    # A single shared rng stream, drawn from n_mocks times in a row -- this
+    # is what from_dense_basis_batch does internally, so the comparison must
+    # use the same stream-sharing pattern, not n_mocks independently-seeded calls.
+    rng_shared = np.random.default_rng(42)
+    looped = [GalaxyContinuum.from_dense_basis(rng_shared, t_obs_gyr=t_obs) for _ in range(n_mocks)]
+
+    batched = GalaxyContinuum.from_dense_basis_batch(np.random.default_rng(42), t_obs, n_mocks)
+
+    assert len(batched) == n_mocks
+    for i in range(n_mocks):
+        np.testing.assert_allclose(batched[i].flux, looped[i].flux, rtol=1e-4, atol=1e-30)
+        assert batched[i].meta["backend"] == "pretabulated"
+
+
+def test_from_dense_basis_batch_supports_per_mock_t_obs():
+    t_obs_per_mock = [6.0, 9.0, 12.0]
+    batched = GalaxyContinuum.from_dense_basis_batch(np.random.default_rng(7), t_obs_per_mock, n_mocks=3)
+    assert len(batched) == 3
+    for gc in batched:
+        assert np.all(np.isfinite(gc.flux))

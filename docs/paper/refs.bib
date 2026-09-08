@@ -5,9 +5,171 @@
 % and this file should never drift apart -- eventually cross-checked
 % automatically, HANDOFF3 Sec. 6.2/7).
 %
-% Empty for now: no citation-bearing code exists yet in this refactor.
-% Standard ADS/NASA-ADS-exported BibTeX entries are the expected format
-% (author, year, journal, volume, pages, doi/arxiv where available) --
-% pull real entries from ADS (https://ui.adsabs.harvard.edu/) rather than
-% hand-typing them, to keep formatting/fields consistent with what
-% aasjournal.bst expects.
+% Every entry below was independently verified via live lookup (WebSearch/
+% WebFetch against ADS, arXiv, journal pages, or the cited GitHub repo) in
+% the same session that wrote the citing code -- not transcribed from
+% training-data memory. Author/year/journal/volume/page(article id) are
+% confirmed for all entries; a `doi` field is included only where that
+% specific string was independently confirmed in that lookup (omitted,
+% not guessed, otherwise -- check ADS directly before relying on a DOI for
+% any entry below that lacks one).
+
+% =============================================================================
+% galaxy_continuum.sfh -- Dense-Basis-style continuous SFH generation
+% =============================================================================
+@ARTICLE{IyerGawiser2017,
+    author = {{Iyer}, Kartheik and {Gawiser}, Eric},
+    title = "{Reconstructing Star Formation Histories with Nonparametric Spline Fits}",
+    journal = {The Astrophysical Journal},
+    year = 2017,
+    volume = {838},
+    pages = {127},
+    note = {Introduces the Dense Basis approach this project's SFH generator is modeled on.},
+}
+
+@ARTICLE{Iyer2019,
+    author = {{Iyer}, Kartheik G. and {Gawiser}, Eric and {Faber}, S.~M. and {Ferguson}, Henry~C. and {Kartaltepe}, Jeyhan and {Koekemoer}, Anton~M. and {Pacifici}, Camilla and {Somerville}, Rachel~S.},
+    title = "{Nonparametric Star Formation History Reconstruction with Gaussian Processes. I. Counting Major Episodes of Star Formation}",
+    journal = {The Astrophysical Journal},
+    year = 2019,
+    volume = {879},
+    pages = {116},
+    note = {Matern-3/2 Gaussian-process reconstruction of cumulative mass fraction vs. cosmic time; this project's SFH module implements a simplified numpy-only version of this method (see sfh.py's module docstring for the documented departures).},
+}
+
+% =============================================================================
+% galaxy_continuum.metallicity -- closed-box chemical enrichment
+% =============================================================================
+@ARTICLE{SearleSargent1972,
+    author = {{Searle}, L. and {Sargent}, W.~L.~W.},
+    title = "{Inferences from the Composition of Two Dwarf Blue Galaxies}",
+    journal = {The Astrophysical Journal},
+    year = 1972,
+    volume = {173},
+    pages = {25},
+    note = {Origin of the classic closed-box chemical evolution relation Z = y * ln(1/mu) this project's metallicity module implements directly.},
+}
+
+@ARTICLE{YinShenHao2023,
+    author = {{Yin}, Jing and {Shen}, Shiyin and {Hao}, Lei},
+    title = "{Linking the Metallicity Enrichment History to the Star Formation History: An SFH-regulated Chemical Evolution Model and Its Implications for the Gas Cycling Process}",
+    journal = {The Astrophysical Journal},
+    year = 2023,
+    volume = {958},
+    pages = {34},
+    doi = {10.3847/1538-4357/acfa6b},
+    note = {A more complete SFH-regulated chemical evolution model (inflow/outflow, KS law) than the closed-box relation this project currently uses -- flagged in metallicity.py's module docstring as a documented future refinement.},
+}
+
+% =============================================================================
+% galaxy_continuum.imf -- simplified metallicity-dependent IMF
+% =============================================================================
+@ARTICLE{Kroupa2001,
+    author = {{Kroupa}, Pavel},
+    title = "{On the variation of the initial mass function}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2001,
+    volume = {322},
+    pages = {231-246},
+    doi = {10.1046/j.1365-8711.2001.04022.x},
+    note = {Canonical IMF (alpha1=1.3, alpha2=2.3, alpha3=2.3) this project's imf.py uses as its Z=solar baseline.},
+}
+
+@ARTICLE{KroupaWeidner2003,
+    author = {{Kroupa}, Pavel and {Weidner}, Carsten},
+    title = "{Evolution of the Galactic-Field Initial Mass Function}",
+    journal = {The Astrophysical Journal},
+    year = 2003,
+    volume = {598},
+    pages = {1076-1078},
+    doi = {10.1086/379105},
+    note = {Original IGIMF (Integrated Galaxy-wide IMF) theory -- the full theory this project's IMF treatment deliberately simplifies away from (see imf.py's module docstring for exactly what is and isn't implemented).},
+}
+
+@ARTICLE{Jerabkova2018,
+    author = {{Jer{\'a}bkov{\'a}}, T. and {Hasani Zonoozi}, A. and {Kroupa}, P. and {Beccari}, G. and {Yan}, Z. and {Vazdekis}, A. and {Zhang}, Z.-Y.},
+    title = "{Impact of metallicity and star formation rate on the time-dependent, galaxy-wide stellar initial mass function}",
+    journal = {Astronomy \& Astrophysics},
+    year = 2018,
+    volume = {620},
+    pages = {A39},
+    note = {Modern IGIMF formulation (metallicity- and SFR-dependent galaxy-wide IMF grid) -- cited in imf.py as the full theory being simplified from, not directly implemented.},
+}
+
+@ARTICLE{YanJerabkovaKroupa2017,
+    author = {{Yan}, Zhiqiang and {Jer{\'a}bkov{\'a}}, Tereza and {Kroupa}, Pavel},
+    title = "{The optimally sampled galaxy-wide stellar initial mass function. Observational tests and the publicly available GalIMF code}",
+    journal = {Astronomy \& Astrophysics},
+    year = 2017,
+    volume = {607},
+    pages = {A126},
+    note = {Reference implementation (galIMF, github.com/Azeret/galIMF) this project's imf.py verified its metallicity-dependent alpha1/alpha2 formula against directly (source code, not just the paper text).},
+}
+
+@ARTICLE{YanJerabkovaKroupaVazdekis2019,
+    author = {{Yan}, Zhiqiang and {Jer{\'a}bkov{\'a}}, Tereza and {Kroupa}, Pavel and {Vazdekis}, Alexandre},
+    title = "{Chemical evolution of elliptical galaxies with a variable IMF}",
+    journal = {Astronomy \& Astrophysics},
+    year = 2019,
+    volume = {629},
+    pages = {A93},
+    note = {Companion galIMF paper (chemical-evolution application) -- cited alongside YanJerabkovaKroupa2017 as the reference implementation's own citation pair.},
+}
+
+@ARTICLE{ShardaKrumholz2022,
+    author = {{Sharda}, Piyush and {Krumholz}, Mark R.},
+    title = "{When did the initial mass function become bottom-heavy?}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2022,
+    volume = {509},
+    pages = {1959-1984},
+    doi = {10.1093/mnras/stab2921},
+    note = {Physical (gas-thermodynamics-driven) characteristic-mass IMF theory -- closer to what this project's IMF treatment was originally envisioned to do, deliberately deferred in favor of the simpler Jerabkova/galIMF-based treatment (see imf.py's module docstring).},
+}
+
+@ARTICLE{Asplund2009,
+    author = {{Asplund}, Martin and {Grevesse}, Nicolas and {Sauval}, A.~Jacques and {Scott}, Pat},
+    title = "{The Chemical Composition of the Sun}",
+    journal = {Annual Review of Astronomy and Astrophysics},
+    year = 2009,
+    volume = {47},
+    pages = {481-522},
+    doi = {10.1146/annurev.astro.46.060407.145222},
+    note = {Solar metallicity Z_sun=0.0142 used throughout galaxy_continuum for logzsol conversions -- matches the MIST isochrones this project uses.},
+}
+
+% =============================================================================
+% galaxy_continuum -- FSPS itself (spectral synthesis engine, both backends)
+% =============================================================================
+@ARTICLE{Conroy2009,
+    author = {{Conroy}, Charlie and {Gunn}, James E. and {White}, Martin},
+    title = "{The Propagation of Uncertainties in Stellar Population Synthesis Modeling. I. The Relevance of Uncertain Aspects of Stellar Evolution and the Initial Mass Function to the Derived Physical Properties of Galaxies}",
+    journal = {The Astrophysical Journal},
+    year = 2009,
+    volume = {699},
+    pages = {486-506},
+    note = {FSPS (Flexible Stellar Population Synthesis) Paper I -- the synthesis engine both GalaxyContinuum backends (fsps\_direct and pretabulated) are built on, via MIST isochrones + C3K spectral library.},
+}
+
+@ARTICLE{Conroy2010,
+    author = {{Conroy}, Charlie and {Gunn}, James E.},
+    title = "{The Propagation of Uncertainties in Stellar Population Synthesis Modeling. III. Model Calibration, Comparison, and Evaluation}",
+    journal = {The Astrophysical Journal},
+    year = 2010,
+    volume = {712},
+    pages = {833-857},
+    note = {FSPS Paper III (model calibration) -- cited alongside Conroy2009 as the standard FSPS reference pair.},
+}
+
+% =============================================================================
+% demiurge.parameters.registry -- galaxy_continuum.sfh.mass_quantile_gap_fractions
+% =============================================================================
+@ARTICLE{IglesiasNavarro2024,
+    author = {{Iglesias-Navarro}, Patricia and {Huertas-Company}, Marc and {Mart{\'\i}n-Navarro}, Ignacio and {Knapen}, Johan~H. and {Pernet}, Emilie},
+    title = "{Deriving the star formation histories of galaxies from spectra with simulation-based inference}",
+    journal = {Astronomy \& Astrophysics},
+    year = 2024,
+    volume = {689},
+    pages = {A58},
+    note = {DESI-targeted SBI spectral-inversion model using a Dense-Basis-based SFH parameterization; its Dirichlet(alpha=1) prior on per-bin sSFR fractions is the (not-identical, only inspirational) basis for this project's own quantile-gap Dirichlet prior default.},
+}

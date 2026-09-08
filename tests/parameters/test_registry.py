@@ -1,15 +1,7 @@
 import pytest
 
 from demiurge.parameters.distributions import Uniform
-from demiurge.parameters.registry import REGISTRY, NPEParameter, get_parameter, list_parameters
-
-
-def test_registry_is_empty_scaffolding():
-    """The registry is deliberately empty until real channel modules are
-    built alongside real entries (ground-up rebuild, not a bulk port from
-    main -- see registry.py's module docstring). This test exists so an
-    accidental bulk-population regression is caught immediately."""
-    assert REGISTRY == {}
+from demiurge.parameters.registry import NPEParameter, get_parameter, list_parameters
 
 
 def test_construction_rejects_tier_1():

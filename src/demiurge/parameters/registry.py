@@ -11,17 +11,16 @@ conditioned by the NPE instead. A Tier 3 quantity has no exact or empirical
 source at all -- still an NPE-parameter, still explicitly labeled, but its
 default distribution is a stated judgment call pending real NPE calibration.
 
-**This registry is deliberately empty of real entries right now.** The
-refactor is a ground-up rebuild, not an incremental patch of `main` -- `main`
-is a reference to consult for physics/citations when a channel is actually
-being (re-)designed and built, not a manifest to bulk-port ahead of that
-work. Add a parameter here only alongside the real channel module that owns
-it, with its citation/rationale re-verified against the actual literature (or
-against `main`'s own citation comments, re-checked, not assumed current) at
-the time it's added -- not copied wholesale from an earlier research pass.
-(A full research extraction of every Tier 2/3 parameter `main` currently
-defines exists as reference material, kept outside this repo -- ask if you
-need to know where; it is not meant to be transcribed in bulk.)
+**Entries are added one channel at a time, alongside that channel's real
+module** -- this is a ground-up rebuild, not an incremental patch of `main`.
+`main` is a reference to consult for physics/citations when a channel is
+actually being (re-)designed and built, not a manifest to bulk-port ahead of
+that work; every entry below was added alongside real code for that specific
+channel, with its own literature check at the time (not copied wholesale
+from `main` or from an earlier research pass). (A full research extraction
+of every Tier 2/3 parameter `main` currently defines exists as reference
+material, kept outside this repo -- ask if you need to know where; it is not
+meant to be transcribed in bulk.)
 
 Every entry added here must be `physical=True` unless it's a genuine property
 of the generative model/instrument rather than the astrophysical source
@@ -56,7 +55,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .distributions import Distribution
+from .distributions import Dirichlet, Distribution, LogUniform, Uniform
 
 
 @dataclass(frozen=True)
@@ -97,9 +96,92 @@ def _add(*params: NPEParameter) -> None:
 
 
 # =============================================================================
+# galaxy_continuum.sfh -- Dense-Basis-style continuous SFH generator
+# (Iyer & Gawiser 2017, ApJ 838, 127; Iyer et al. 2019, ApJ 879, 116)
+# =============================================================================
+_add(
+    NPEParameter(
+        name="galaxy_continuum.sfh.total_stellar_mass",
+        owner="galaxy_continuum.sfh",
+        tier=3,
+        physical=True,
+        distribution=LogUniform(5.0e7, 5.0e12),
+        units="Msun",
+        description="Total stellar mass formed by the observation epoch (integral of SFR(t)).",
+        rationale="Order-of-magnitude bracket spanning the real galaxy stellar-mass-function range, not fit to a specific survey's mass function -- MAGIC.",
+    ),
+    NPEParameter(
+        name="galaxy_continuum.sfh.mass_quantile_gap_fractions",
+        owner="galaxy_continuum.sfh",
+        tier=3,
+        physical=True,
+        distribution=Dirichlet((2.0, 2.0, 2.0, 2.0)),
+        units="unitless (4 fractions summing to 1, of the interval [0, t_obs])",
+        description=(
+            "Fractional time-gaps between the four intervals bounded by the mass-formation quantile "
+            "times t25/t50/t75 and the endpoints t=0 (formation) and t=t_obs (observation) -- "
+            "cumulative-summing these fractions (times t_obs) gives the three quantile constraint "
+            "times fed to the SFH Gaussian-process reconstruction."
+        ),
+        rationale=(
+            "Symmetric Dirichlet(alpha=2) chosen as a mildly-peaked-toward-even-spacing prior over the "
+            "ordering-respecting simplex -- inspired by, but not independently verified against, the "
+            "alpha=1 (uniform-simplex) choice Iglesias-Navarro et al. (2024, A&A 689, A58) used for a "
+            "related (not identical) per-bin sSFR-fraction Dirichlet prior in their own Dense-Basis-based "
+            "SBI model. MAGIC pending a dedicated check against Iyer et al.'s own default."
+        ),
+    ),
+    NPEParameter(
+        name="galaxy_continuum.sfh.gp_length_scale_fraction",
+        owner="galaxy_continuum.sfh",
+        tier=3,
+        physical=True,
+        distribution=Uniform(0.05, 0.5),
+        units="unitless (fraction of t_obs)",
+        description=(
+            "Matern-3/2 GP length-scale, as a fraction of t_obs, controlling SFH smoothness/burstiness "
+            "(Iyer et al. 2019's own description: 'the tension in a string that passes through all the "
+            "constraints') -- small values allow burstier reconstructed SFHs, large values force smoother ones."
+        ),
+        rationale=(
+            "Iyer et al. (2019, ApJ 879, 116) state this hyperparameter was calibrated against semi-"
+            "analytic models to minimize reconstruction loss while avoiding unphysical negative SFR, but "
+            "their exact calibrated value/range was not independently verified here -- MAGIC range pending "
+            "that check."
+        ),
+    ),
+)
+
+# =============================================================================
+# galaxy_continuum.metallicity -- closed-box chemical enrichment tied to the
+# SFH's own cumulative mass fraction (Searle & Sargent 1972)
+# =============================================================================
+_add(
+    NPEParameter(
+        name="galaxy_continuum.metallicity.yield",
+        owner="galaxy_continuum.metallicity",
+        tier=3,
+        physical=True,
+        distribution=LogUniform(1.0e-3, 5.0e-2),
+        units="unitless (absolute metal-mass yield per unit mass locked into stars)",
+        description="Effective nucleosynthetic yield y in the closed-box relation Z(t) = y * ln(1/mu(t)).",
+        rationale="Order-of-magnitude bracket consistent with typical effective-yield values discussed in the chemical-evolution literature -- not fit to a specific measured sample. MAGIC.",
+    ),
+    NPEParameter(
+        name="galaxy_continuum.metallicity.star_formation_efficiency",
+        owner="galaxy_continuum.metallicity",
+        tier=3,
+        physical=True,
+        distribution=Uniform(0.01, 0.99),
+        units="unitless (fraction of the initial gas reservoir ultimately locked into stars by t_obs)",
+        description="Efficiency epsilon setting the closed-box gas reservoir size (M_gas,initial = total_stellar_mass / epsilon), via mu(t) = 1 - epsilon * F(t).",
+        rationale="Bounded (0,1) by the closed-box construction itself; the specific prior shape (uniform) is not fit to real gas-fraction observations. MAGIC.",
+    ),
+)
+
+# =============================================================================
 # Real channel parameters get added here, one channel at a time, alongside
-# that channel's actual module -- see the module docstring above. Empty for
-# now: no demiurge channel modules have been built yet.
+# that channel's actual module -- see the module docstring above.
 # =============================================================================
 
 

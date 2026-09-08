@@ -6,21 +6,37 @@ DESI-like spectra, decomposed by construction into named additive channels
 signal a downstream neural decomposer needs, since that decomposition isn't
 observable for real spectra. Part of the DESI-Flow framework.
 
-**Current state: NPE-parameter registry scaffolding.** No physics-generation
-channels have been built yet. `demiurge.parameters` provides the schema
+**Current state: first physics channel (galaxy continuum) built.**
+`demiurge.parameters` provides the NPE-parameter registry scaffolding
 (`NPEParameter`: tier, citation, physical/non-physical tag, default prior
-distribution) and `PriorSampler`, but the registry itself is deliberately
-empty -- entries are added one channel at a time, alongside that channel's
-real code, not bulk-ported ahead of it (this is a ground-up rebuild; `main`
-is a reference to consult per-feature, not a source to copy from). `demiurge.rng`
-provides reproducible, independent RNG streams for the pipeline. See the
-`refactor` branch's own history for progress. This description will be
-extended as real modules land; it does not describe anything aspirational.
+distribution) and `PriorSampler` -- entries are added one channel at a time,
+alongside that channel's real code, not bulk-ported ahead of it (this is a
+ground-up rebuild; `main` is a reference to consult per-feature, not a
+source to copy from). `demiurge.rng` provides reproducible, independent RNG
+streams for the pipeline.
+
+`demiurge.galaxy_continuum.GalaxyContinuum` synthesizes the pure-stellar
+continuum (no dust) for a galaxy mock: a Dense-Basis-style continuous star-
+formation history, a closed-box metallicity history tied to it, and a
+simplified metallicity-dependent IMF, synthesized via FSPS (MIST + C3K_HR).
+Two synthesis backends: `pretabulated` (default -- fast numpy/torch
+interpolation of a precomputed grid shipped as package data, no python-fsps
+needed at runtime) and `fsps_direct` (slower, calls FSPS per time-bin,
+serves as the validation reference `pretabulated` is tested against).
+
+See the `refactor` branch's own history for progress. This description will
+be extended as real modules land; it does not describe anything
+aspirational.
 
 Citations and physics rationale accumulate alongside the code in
 [`docs/paper/methods.tex`](docs/paper/methods.tex) +
 [`docs/paper/refs.bib`](docs/paper/refs.bib) (AASTeX v7, ApJ-targeted) --
-also currently just scaffolding.
+the galaxy continuum channel's Methods subsection and its 14 references are
+the first real content; every citation was independently verified via live
+lookup (ADS/journal/arXiv/the cited code repo), not transcribed from
+memory. Not yet compiled against a real LaTeX toolchain in this environment
+-- checked by hand for balanced braces/citation-key consistency instead;
+worth a real compile pass before this is ever submitted anywhere.
 
 ## Relationship to `main`
 

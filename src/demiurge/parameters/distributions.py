@@ -200,6 +200,41 @@ class MaxwellBoltzmann:
         return np.linalg.norm(components, axis=-1)
 
 
+@dataclass(frozen=True)
+class Dirichlet:
+    """Dirichlet(alpha) over a k-simplex: draws a vector of k non-negative
+    fractions summing to 1 (e.g. the fractional time-gaps between ordered
+    mass-formation quantiles). `alpha` is a per-component concentration
+    tuple; a symmetric Dirichlet uses the same value k times. Unlike the
+    other families here, a single draw is itself a k-vector, not a scalar --
+    `draw(rng)` returns shape (k,), `draw(rng, size=n)` returns (n, k).
+    """
+
+    alpha: tuple
+
+    def __post_init__(self) -> None:
+        if len(self.alpha) < 2:
+            raise ValueError(f"Dirichlet requires at least 2 components, got {len(self.alpha)}")
+        if not all(a > 0.0 for a in self.alpha):
+            raise ValueError(f"Dirichlet requires all alpha > 0, got {self.alpha}")
+
+    @property
+    def support(self) -> tuple[float, float]:
+        return (0.0, 1.0)
+
+    def draw(self, rng: np.random.Generator, size: Optional[int] = None):
+        return rng.dirichlet(self.alpha, size=size)
+
+
 Distribution = Union[
-    Uniform, LogUniform, Normal, LogNormal, DiscreteUniform, Bernoulli, Poisson, Gamma, MaxwellBoltzmann
+    Uniform,
+    LogUniform,
+    Normal,
+    LogNormal,
+    DiscreteUniform,
+    Bernoulli,
+    Poisson,
+    Gamma,
+    MaxwellBoltzmann,
+    Dirichlet,
 ]

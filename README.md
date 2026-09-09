@@ -6,7 +6,7 @@ DESI-like spectra, decomposed by construction into named additive channels
 signal a downstream neural decomposer needs, since that decomposition isn't
 observable for real spectra. Part of the DESI-Flow framework.
 
-**Current state: first physics channel (galaxy continuum) built.**
+**Current state: two physics channels (galaxy continuum, quasar continuum) built.**
 `demiurge.parameters` provides the NPE-parameter registry scaffolding
 (`NPEParameter`: tier, citation, physical/non-physical tag, default prior
 distribution) and `PriorSampler` -- entries are added one channel at a time,
@@ -24,6 +24,17 @@ interpolation of a precomputed grid shipped as package data, no python-fsps
 needed at runtime) and `fsps_direct` (slower, calls FSPS per time-bin,
 serves as the validation reference `pretabulated` is tested against).
 
+`demiurge.quasar_continuum.QuasarContinuum` synthesizes the AGN
+accretion-disk continuum: a full reimplementation (not a wrapper) of AGNSED
+(Kubota & Done 2018) -- an outer Novikov-Thorne disc, a per-annulus warm
+Comptonising region producing the soft X-ray excess, and a hot corona
+producing the hard X-ray power-law tail, all validated directly against the
+real HEASARC-distributed `agnsed.f`/`qsosed.f` Fortran source (compiled and
+run unmodified) rather than any third-party port. Pure numpy, no new
+runtime dependencies. Several parameters QSOSED itself pins at a single
+value are real Tier-2 NPE-parameters here instead, backed by the population
+scatter Kubota & Done (2018) themselves report.
+
 See the `refactor` branch's own history for progress. This description will
 be extended as real modules land; it does not describe anything
 aspirational.
@@ -31,10 +42,11 @@ aspirational.
 Citations and physics rationale accumulate alongside the code in
 [`docs/paper/methods.tex`](docs/paper/methods.tex) +
 [`docs/paper/refs.bib`](docs/paper/refs.bib) (AASTeX v7, ApJ-targeted) --
-the galaxy continuum channel's Methods subsection and its 14 references are
-the first real content; every citation was independently verified via live
-lookup (ADS/journal/arXiv/the cited code repo), not transcribed from
-memory. Not yet compiled against a real LaTeX toolchain in this environment
+the galaxy and quasar continuum channels' Methods subsections (30
+references total) are the first real content; every citation was
+independently verified via live lookup (ADS/journal/arXiv/the cited code
+repo, and for the quasar continuum channel, the compiled reference Fortran
+itself), not transcribed from memory. Not yet compiled against a real LaTeX toolchain in this environment
 -- checked by hand for balanced braces/citation-key consistency instead;
 worth a real compile pass before this is ever submitted anywhere.
 

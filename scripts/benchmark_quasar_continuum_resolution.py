@@ -38,17 +38,25 @@ hardware -- see this script's own printed table for exact numbers):
 - **Energy conservation (integrated L / (mdot*L_Edd)) is completely FLAT
   across the whole n_energy_bins range tested (100-3600), for both a
   QSOSED-typical case (ratio ~1.088-1.091) and a harder/cooler-warm,
-  high-hard-Xray-fraction case (ratio ~1.132-1.134).** This is a real,
-  useful negative result: the ~9-13% energy-conservation gap already
-  documented in quasar_continuum/geometry.py's module docstring is NOT a
-  discretization artifact of the energy grid (nor, per the channel's
-  original sandbox validation, of the icor/iout radial grid either, which
-  was checked separately and also found already converged) -- it's coming
-  from somewhere else in the model, not yet chased down further. Safe
-  implication: n_energy_bins can be lowered from the current default (600)
-  toward ~200-300 for a real ~2x speed win with no measurable loss in
-  either output fidelity or energy-conservation accuracy, if that
-  trade-off is ever wanted.
+  high-hard-Xray-fraction case (ratio ~1.132-1.134, pre-fix numbers -- see
+  below).** This was a real, useful negative result at the time: the then-
+  documented ~9-13% energy-conservation gap was NOT a discretization
+  artifact of the energy grid (nor, per the channel's original sandbox
+  validation, of the icor/iout radial grid either, which was checked
+  separately and also found already converged) -- ruling out discretization
+  is exactly what motivated chasing the gap down to its real cause. That
+  cause has since been root-caused and fixed (2026-09-09, same day): the
+  disc/warm zones' own spectral synthesis was never subtracting the
+  fraction of each annulus's photons intercepted by the corona as seed
+  photons, double-counting that energy against the corona's own `L_hot`
+  output -- see quasar_continuum/geometry.py's module docstring for the
+  full diagnosis and fix. Post-fix, the ratios above land close to 1.0
+  instead (~0.95-1.10 depending on reprocess/hard_xray_luminosity_fraction)
+  -- this script's own resolution sweep was not rerun after the fix, so the
+  ratio values quoted above are historical, pre-fix numbers, kept for
+  record of how the diagnosis was reached. The n_energy_bins/speed
+  finding itself (sub-linear growth, ~2x win available toward 200-300
+  bins) is unaffected by the fix and still holds.
 """
 from __future__ import annotations
 

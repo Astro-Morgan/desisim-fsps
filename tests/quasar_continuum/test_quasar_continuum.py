@@ -138,14 +138,19 @@ def test_reproduces_kubota_done_figure_9_peak_flux(mdot_edd, expected_peak):
     assert e2n_flux.max() == pytest.approx(expected_peak, rel=0.15)
 
 
-# --- Energy-conservation mechanism, pinned down 2026-09-09 (see
-# geometry.py's module docstring for the full explanation): with
-# reprocessing on, the total synthesized luminosity exceeds mdot*L_Edd by
-# ~9-13%, and this is NOT a bug -- L_hot already includes seed photons
-# intercepted from the disc/warm zones, and reprocessing then illuminates
-# that same L_hot back onto the disc/warm zones, double-counting that
-# energy. Confirmed by disabling reprocessing, where the excess disappears
-# almost entirely (residual is discretization error, not this effect). ---
+# --- Energy-conservation correction, 2026-09-09 (see geometry.py's module
+# docstring for the full explanation): the official AGNSED Fortran counts
+# each disc/warm annulus's photons twice near r_hot -- once in full in the
+# zone's own direct spectrum, and again via L_seed once those same
+# corona-intercepted photons get Comptonized into the hot component. This
+# module now reduces each disc/warm annulus's emitted luminosity by the
+# same corona_covering_fraction() that geometry.py already uses to compute
+# L_seed, so that energy is counted once, not twice. This is a deliberate,
+# documented departure from AGNSED's own published treatment (see
+# methods.tex) -- it forfeits exact bit-for-bit parity with the compiled
+# Fortran's *spectrum* (the geometry/energetics solve in geometry.py is
+# untouched and still matches to 4+ decimal places) in exchange for a
+# self-consistent total luminosity close to mdot*L_Edd. ---
 def _total_synthesized_over_edd(**overrides):
     from demiurge.quasar_continuum.continuum import KEV_TO_ERG, _synthesize_photon_rates
     from demiurge.quasar_continuum.geometry import solve_geometry
@@ -166,24 +171,27 @@ def _total_synthesized_over_edd(**overrides):
     return total_erg_s / (geom.mdot_edd * geom.ledd)
 
 
-def test_reprocessing_produces_the_expected_luminosity_excess():
+def test_reprocessing_conserves_energy_to_the_edd_target():
+    """Post-fix (2026-09-09): with the corona-covering-fraction correction
+    applied to the disc/warm zones' own emission, reprocess=True should
+    land close to mdot*L_Edd -- residual is Frep second-order effects plus
+    discretization (geometry.py's IMAX=2000 grid vs. continuum.py's
+    icor/iout grid are not identical), not the old ~9-13% double-count."""
     ratio = _total_synthesized_over_edd(reprocess=True)
-    assert 1.05 < ratio < 1.20, (
-        f"expected the documented ~9-13% reprocessing-driven excess, got ratio={ratio:.4f} -- "
-        f"if this moves outside that band, something about the reprocessing mechanism itself "
-        f"changed, not just numerical noise (see geometry.py's module docstring)."
+    assert 0.95 < ratio < 1.10, (
+        f"expected near-unity total luminosity after the energy-conservation fix, got "
+        f"ratio={ratio:.4f} -- if this drifts outside this band, the corona_covering_fraction "
+        f"correction itself may have regressed (see geometry.py's module docstring)."
     )
 
 
-def test_disabling_reprocessing_leaves_only_the_seed_photon_baseline():
-    """reprocess=False turns off the Frep illumination boost (mechanism 2
-    in geometry.py's module docstring) but NOT the corona's always-on
-    interception of disc/warm seed photons (mechanism 1) -- so this is
-    expected to land near ~1.03-1.04, not exactly 1.0. Bounded well below
-    the full-reprocessing ratio (~1.09-1.13, see the test above) to keep
-    this a meaningful regression guard on mechanism 2 specifically."""
+def test_disabling_reprocessing_still_conserves_energy():
+    """reprocess=False turns off the Frep illumination boost (mechanism 2)
+    but the corona-covering-fraction correction (mechanism 1's fix) is
+    unconditional, so this should also land close to 1.0, not the old
+    ~1.03-1.04 residual baseline."""
     ratio = _total_synthesized_over_edd(reprocess=False)
-    assert 1.0 < ratio < 1.06
+    assert 0.95 < ratio < 1.05
 
 
 def test_from_parameters_reprocess_flag_actually_changes_the_spectrum():

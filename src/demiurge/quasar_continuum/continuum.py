@@ -12,11 +12,21 @@ hot-corona Comptonization (renormalized to L_hot). Faithful to the official
 Fortran's structure (`geometry.py`'s module docstring has the full
 validation summary: geometry exact to 4+ decimal places against the
 compiled reference, each zone's own synthesis exact to <0.02% against its
-own true local Novikov-Thorne target, the ~9-13% total-luminosity excess
-with reprocessing on fully explained -- not a bug, see geometry.py -- and
-the full spectral shape/normalization within ~1% of KD18's own published
-Figure 9 once compared on equal footing -- same M/mdot, same i=45deg
-inclination, same 100 Mpc fiducial distance).
+own true local Novikov-Thorne target, and the full spectral shape/
+normalization within ~1-2% of KD18's own published Figure 9 once compared
+on equal footing -- same M/mdot, same i=45deg inclination, same 100 Mpc
+fiducial distance).
+
+One further, deliberate departure from AGNSED's own Fortran (2026-09-09,
+see `geometry.py`'s module docstring for the full diagnosis): the disc/warm
+synthesis loops below reduce each annulus's emitted luminosity by
+`corona_covering_fraction()` -- the same fraction `geometry.py` already
+treats as intercepted by the corona for `L_seed` -- to fix a real
+energy-bookkeeping error in the official Fortran's own output spectrum
+(that same intercepted energy was being counted twice: once as
+directly-escaping disc/warm light, again via the corona's `L_hot`). This
+forfeits exact bit-for-bit parity with the compiled Fortran's spectrum in
+exchange for a total luminosity that self-consistently tracks mdot*L_Edd.
 
 One deliberate departure from the reference Fortran: everything here is
 built in pure specific-luminosity space (no assumed distance, no 4*pi*d^2
@@ -40,7 +50,7 @@ import numpy as np
 
 from . import comptonization as comp
 from . import novikov_thorne as nt
-from .geometry import ALBEDO, HT_MAX, AGNSEDGeometry, solve_geometry
+from .geometry import ALBEDO, HT_MAX, AGNSEDGeometry, corona_covering_fraction, solve_geometry
 from ..parameters.samplers import ParameterSampler, PriorSampler
 
 H_ERG_S = 6.62617e-27  # erg s, agnsed.f's own literal (not modern CODATA) -- kept for exact parity
@@ -117,10 +127,11 @@ def _synthesize_photon_rates(geom: AGNSEDGeometry, ear_kev, kte_hot_kev, kte_war
         min(geom.r_hot, HT_MAX), ALBEDO
     )
     t_disk_kev = t_disk4 ** 0.25 / KKEV
+    disk_escaping = 1.0 - corona_covering_fraction(r_disk, geom.r_hot)
 
     disk_rate = np.zeros(ne)
-    for r, dr, tkev in zip(r_disk, dr_disk, t_disk_kev):
-        area_term = 4.0 * np.pi * r * dr * rgcm ** 2
+    for r, dr, tkev, escaping in zip(r_disk, dr_disk, t_disk_kev, disk_escaping):
+        area_term = 4.0 * np.pi * r * dr * rgcm ** 2 * escaping
         with np.errstate(over="ignore"):
             occ = 1.0 / (np.exp(np.clip(en_mid / tkev, None, 700)) - 1.0)
         dflux = np.pi * 2.0 * H_ERG_S * (en_mid * KEVHZ) ** 3 / 8.98755e20 * area_term * occ
@@ -134,12 +145,13 @@ def _synthesize_photon_rates(geom: AGNSEDGeometry, ear_kev, kte_hot_kev, kte_war
         min(geom.r_hot, HT_MAX), ALBEDO
     )
     t_warm_kev_local = t_warm4 ** 0.25 / KKEV
+    warm_escaping = 1.0 - corona_covering_fraction(r_warm_grid, geom.r_hot)
 
     warm_rate = np.zeros(ne)
-    for r, dr, tkev in zip(r_warm_grid, dr_warm_grid, t_warm_kev_local):
+    for r, dr, tkev, escaping in zip(r_warm_grid, dr_warm_grid, t_warm_kev_local, warm_escaping):
         shape = comp.donthcomp(ear_kev, gamma_warm, kte_warm_kev, tkev)
         dllth = np.sum(shape * en_mid * KEVHZ * H_ERG_S)
-        d_l_annulus = 2 * 2 * np.pi * r * dr * rgcm ** 2 * nt.SIGMA_SB_CGS * (tkev * KKEV) ** 4
+        d_l_annulus = 2 * 2 * np.pi * r * dr * rgcm ** 2 * nt.SIGMA_SB_CGS * (tkev * KKEV) ** 4 * escaping
         if dllth > 0:
             warm_rate += shape * (d_l_annulus / dllth)
 

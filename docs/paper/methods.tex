@@ -211,20 +211,45 @@ reproduces the compiled reference to four or more decimal places, including
 for \citet{KubotaDone2018}'s own three individually-fitted AGN (NGC~5548,
 Mrk~509, PG~1115+407, their Table~2); total energy conservation across the
 disc/warm/hot partition (the summed luminosity must equal $\dot m
-L_{\rm Edd}$) holds to within $\sim$10\%; and the full synthesized spectral
-shape and absolute normalization together reproduce
-\citet{KubotaDone2018}'s own published Figure~9 ($M=10^8\,M_\odot$,
-$\dot m=0.05$ and $0.5$, evaluated as a flux at their stated fiducial
-100~Mpc distance and $i=45^\circ$ inclination) to within $\sim$1\% once
-compared on genuinely equal footing. One precisely-diagnosed bug was found
-in the official Fortran's own diagnostic print statements along the way (a
-variable, already correctly repurposed as a flux for the final output
-spectrum's own normalization, gets reused a few lines later in a
-temperature print statement that expects a true luminosity instead) --
-confirmed by exactly reproducing the Fortran's printed value when the same
-variable reuse is deliberately replicated; it does not affect the model's
-actual physics or this implementation, which always uses the correct,
-undivided luminosity.
+L_{\rm Edd}$) holds to within a few percent (see below for a correction
+applied here that brought this down from an initially measured
+$\sim$9--13\%); and the full synthesized spectral shape and absolute
+normalization together reproduce \citet{KubotaDone2018}'s own published
+Figure~9 ($M=10^8\,M_\odot$, $\dot m=0.05$ and $0.5$, evaluated as a flux
+at their stated fiducial 100~Mpc distance and $i=45^\circ$ inclination) to
+within $\sim$2\% once compared on genuinely equal footing. One
+precisely-diagnosed bug was found in the official Fortran's own diagnostic
+print statements along the way (a variable, already correctly repurposed
+as a flux for the final output spectrum's own normalization, gets reused a
+few lines later in a temperature print statement that expects a true
+luminosity instead) -- confirmed by exactly reproducing the Fortran's
+printed value when the same variable reuse is deliberately replicated; it
+does not affect the model's actual physics or this implementation, which
+always uses the correct, undivided luminosity.
+
+A second, more consequential issue was found and, unlike the print-only
+bug above, corrected in this implementation: with reprocessing enabled,
+the official Fortran's own output spectrum double-counts a fraction of the
+disc/warm zones' photon energy. AGNSED's hot corona intercepts a
+geometric, view-factor-weighted fraction of each outer annulus's photons
+as Comptonisation seed photons, and its own luminosity $L_{\rm hot}$
+(Eq.~1 of \citealt{KubotaDone2018}) is normalized to include that
+intercepted energy -- but the disc/warm zones' own synthesized spectra
+were never reduced by the same intercepted fraction, so that energy is
+emitted in full by the disc/warm zones \emph{and} re-emitted, Comptonised,
+by the corona. This was confirmed present in the compiled reference
+Fortran itself (not introduced by this reimplementation, whose geometry
+solve reproduces \texttt{agnsed.f}/\texttt{qsosed.f}'s own intercepted-flux
+term, \texttt{seeddis}, to the same four-or-more-decimal-place accuracy
+quoted above), and is corrected here by multiplying each disc/warm
+annulus's emitted luminosity by one minus that same intercepted fraction
+before spectral synthesis, so the energy is counted once rather than
+twice. This is a deliberate departure from the reference Fortran's output
+\emph{spectrum} (its solved geometry/energetics are untouched and remain
+exact to four-plus decimal places): post-correction, total luminosity
+across the three zones lands within a few percent of $\dot m L_{\rm Edd}$
+rather than the $\sim$9--13\% excess measured before the fix, and the
+Figure~9 comparison above is quoted post-correction.
 
 Unlike the reference Fortran (and unlike a third-party Python port of
 QSOSED evaluated, and rejected as a runtime dependency, before this module

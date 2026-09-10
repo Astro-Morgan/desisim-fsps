@@ -27,43 +27,52 @@ Fortran (unmodified, `gfortran -std=legacy`):
 - The spectral assembly built on top of this geometry (see `continuum.py`)
   independently reproduces KD18's own Figure 9 (M=1e8 Msun, mdot=0.05 and
   0.5, E^2 N(E) at 100 Mpc, i=45deg) to ~1% once compared on equal footing.
-- With `reprocess=True` (the default), the disc+warm+hot spectrum's total
-  integrated luminosity exceeds mdot*L_Edd by ~9-13% (2026-09-09 staged
-  diagnostic, `scripts/benchmark_quasar_continuum_resolution.py`'s own
-  findings section has the numbers) -- confirmed NOT a numerical bug: each
-  zone's synthesis independently reproduces its own true local
-  Novikov-Thorne-emissivity integral to <0.02%, and the excess is
-  reproduced almost exactly (1.088 measured vs. 1.088 predicted) just by
-  summing each zone's TRUE reprocessed target directly, with no
-  Comptonization/binning machinery involved at all. The real mechanism:
-  `L_hot` (`lumipl_erg_s`) already includes seed photons intercepted
-  *from* the disc/warm zones (KD18 eq. 1); with reprocessing on, that same
-  `L_hot` then illuminates *back* onto the disc/warm zones (KD18 eq. 5,
-  `Frep`), boosting their own local luminosity a second time with energy
-  that was already counted once. This is a real feature of how KD18
-  define each zone's "local luminosity" once reprocessing redistributes
-  energy between zones, faithfully reproduced from the official Fortran
-  (which does the identical calculation) -- not an error introduced by
-  this reimplementation.
+- 2026-09-09 diagnostic (staged in
+  `scripts/benchmark_quasar_continuum_resolution.py`) found that, with
+  `reprocess=True`, the disc+warm+hot spectrum's total integrated
+  luminosity exceeded mdot*L_Edd by ~9-13%. Root cause, confirmed by
+  reproducing the excess almost exactly (1.088 measured vs. 1.088
+  predicted) from a direct sum of each zone's TRUE local
+  Novikov-Thorne-emissivity target (no Comptonization/binning machinery
+  involved): `L_hot` (`lumipl_erg_s`) already includes seed photons
+  intercepted *from* the disc/warm zones (KD18 eq. 1, `seeddis`) -- but
+  the disc/warm zones' own spectral synthesis (`continuum.py`) never
+  subtracted that same intercepted fraction from what it emits toward the
+  observer. The same photon energy was being counted once as
+  directly-escaping disc/warm light and a second time (Comptonized) as
+  part of the corona's `L_hot`-normalized output. Confirmed present in
+  the official compiled Fortran itself, not introduced by this port (this
+  module's geometry/energetics reproduce `agnsed.f`/`qsosed.f` to 4+
+  decimal places, including `seeddis`) -- an energy-bookkeeping error in
+  AGNSED's own released treatment, not an intentional design choice: the
+  view-factor geometry needed to remove the double-count (`covering(r)`,
+  now `corona_covering_fraction()` below) was already being computed for
+  `L_seed`, just never applied on the emission side.
 
-  Two distinct, separately-confirmed mechanisms contribute, not one:
-  (1) `L_seed` (the corona intercepting ambient disc/warm photons as
-  Comptonization seed photons) is *always* added to `L_hot`'s tally
-  regardless of `reprocess`, without ever being subtracted from the disc/
-  warm zones' own emitted luminosity -- confirmed by disabling
-  reprocessing entirely and still finding a real, non-zero, resolution-
-  independent excess (~3-4% in a fiducial M=1e8/mdot=0.10 case, matching
-  `L_seed`/target almost exactly). (2) The `Frep` illumination boost
-  itself, only active when `reprocess=True`, is the dominant remaining
-  contribution to the full ~9-13% figure on top of mechanism (1)'s
-  baseline. Neither is a numerical bug -- both are inherent to how the
-  official model defines "local luminosity" once any cross-zone energy
-  exchange (interception or illumination) is included; the model's actual
-  energy-conservation guarantee lives at the level of the intrinsic
-  Novikov-Thorne dissipation integral alone (confirmed to sum to
-  mdot*L_Edd to <0.1%, limited only by the radial grid's own Riemann-sum
-  precision), not at the level of each zone's fully-dressed emitted
-  luminosity once seed-photon interception and reprocessing are folded in.
+  Fixed here (a deliberate, documented departure from AGNSED's own
+  Fortran -- see methods.tex): `continuum.py`'s disc/warm synthesis loops
+  now multiply each annulus's emitted luminosity by
+  `1 - corona_covering_fraction(r, r_hot)`, removing exactly the fraction
+  `geometry.py` already treats as diverted into the corona as seed
+  photons. This mechanism operates regardless of `reprocess` (it is pure
+  photon-interception geometry, independent of the `Frep` illumination
+  boost), so the fix is applied unconditionally. Post-fix, total
+  luminosity lands close to mdot*L_Edd: ~1.00-1.10 with reprocessing on
+  (residual is `Frep` second-order effects plus discretization -- this
+  module's IMAX=2000 energetics grid and `continuum.py`'s coarser
+  icor/iout synthesis grid are not identical), ~0.95-1.05 with
+  reprocessing off. `geometry.py`'s own energetics (`lumipl_erg_s`,
+  `gamma_hot`, `t_hot_k`, `t_warm_k`) are UNCHANGED by this fix -- it only
+  affects how much of each disc/warm annulus's already-computed local
+  luminosity `continuum.py` allows to escape directly to the observer, not
+  `L_hot`'s normalization target itself. This does forfeit exact
+  bit-for-bit parity with the compiled Fortran's output *spectrum*
+  (though not with its geometry solve, which is untouched and still
+  matches to 4+ decimal places) -- the model's actual energy-conservation
+  guarantee at the level of the intrinsic Novikov-Thorne dissipation
+  integral (mdot*L_Edd to <0.1%) was never in question; what changed is
+  that each zone's fully-dressed *emitted* luminosity now also conserves
+  energy, which the official Fortran's own output did not.
 """
 from __future__ import annotations
 
@@ -85,8 +94,24 @@ IMAX = 2000  # matches agnsed.f/qsosed.f exactly -- see module docstring
 # physical quantity -- neither belongs in the Tier 2/3 NPE-parameter
 # registry as a result (HANDOFF3 Sec. 5.2's "genuine property of the
 # generative model, not the astrophysical source" carve-out).
+# PI NOTE: these should likely become tier 2-3 parameters with
+# gaussian priors for non-trained-NPE generation, we should come back to this
+# after implementing quasar/galaxy blending and before dust and lines.
 ALBEDO = 0.30
 HT_MAX = 100.0
+
+
+def corona_covering_fraction(r, r_hot):
+    """Solid-angle fraction of an annulus at radius `r` (>= r_hot)
+    intercepted by the vertically-extended (height min(r_hot, HT_MAX))
+    hot corona -- the same view-factor geometry `solve_geometry` uses to
+    compute `L_seed` (KD18 eq. 1's second term). Shared with `continuum.py`
+    so the disc/warm zones' own emitted spectrum can be reduced by exactly
+    the fraction geometry.py already accounts for as corona seed photons
+    -- see module docstring, 'energy-conservation correction, 2026-09-09'."""
+    ht = min(r_hot, HT_MAX)
+    theta0 = np.arcsin(np.clip(ht / r, -1.0, 1.0))
+    return (theta0 - 0.5 * np.sin(2 * theta0)) / np.pi
 
 
 def _log_r_grid(r_lo, r_hi, n):
@@ -189,8 +214,7 @@ def solve_geometry(
         )
     else:
         trepdis4 = nt.nt_temperature4(m_msun, astar, mdot_gs, rms, r_grid[mask_outer])
-    theta0 = np.arcsin(np.clip(ht / r_grid[mask_outer], -1.0, 1.0))
-    covering = (theta0 - 0.5 * np.sin(2 * theta0)) / np.pi
+    covering = corona_covering_fraction(r_grid[mask_outer], r_hot)
     seeddis = np.sum(
         2 * 2 * np.pi * r_grid[mask_outer] * dr_grid[mask_outer] * rgcm ** 2 * nt.SIGMA_SB_CGS * trepdis4 * covering
     )

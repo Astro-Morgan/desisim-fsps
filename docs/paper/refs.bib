@@ -17,6 +17,173 @@
 % =============================================================================
 % galaxy_continuum.sfh -- Dense-Basis-style continuous SFH generation
 % =============================================================================
+% =============================================================================
+% quasar_continuum.agnsed -- AGN accretion-disk continuum (full AGNSED)
+% =============================================================================
+@ARTICLE{KubotaDone2018,
+    author = {{Kubota}, Aya and {Done}, Chris},
+    title = "{A physical model of the broadband continuum of AGN and its implications for the UV/X relation and optical variability}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2018,
+    volume = {480},
+    pages = {1247-1262},
+    note = {AGNSED/QSOSED, the full physical model this channel reimplements from the official HEASARC Fortran source (not a third-party port) -- see quasar_continuum/geometry.py's module docstring for the validation summary.},
+}
+
+@INCOLLECTION{NovikovThorne1973,
+    author = {{Novikov}, I.~D. and {Thorne}, K.~S.},
+    title = "{Astrophysics of Black Holes}",
+    booktitle = {Black Holes (Les Astres Occlus)},
+    editor = {{DeWitt}, C. and {DeWitt}, B.~S.},
+    year = 1973,
+    publisher = {Gordon and Breach},
+    address = {New York},
+    pages = {343-450},
+    note = {Relativistic thin-disk temperature profile this channel's disc component uses (quasar_continuum/novikov_thorne.py).},
+}
+
+@ARTICLE{LaorNetzer1989,
+    author = {{Laor}, A. and {Netzer}, H.},
+    title = "{Massive thin accretion discs. I - Calculated spectra}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 1989,
+    volume = {238},
+    pages = {897-916},
+    note = {Disc self-gravity radius formula (novikov_thorne.self_gravity_radius), used verbatim as in agnsed.f.},
+}
+
+@ARTICLE{ZdziarskiJohnsonMagdziarz1996,
+    author = {{Zdziarski}, A.~A. and {Johnson}, W.~N. and {Magdziarz}, P.},
+    title = "{Radio/X-ray/gamma-ray timing/spectral studies of Seyferts, X-ray binaries and X-ray transients: the origin of the X-ray Comptonizing plasma}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 1996,
+    volume = {283},
+    pages = {193-206},
+    note = {The nthcomp thermal-Comptonization model (donthcomp/thcompton/thermlc, quasar_continuum/comptonization.py) this channel's warm/hot spectral shapes are built from.},
+}
+
+@ARTICLE{ZyckiDoneSmith1999,
+    author = {{{\.Z}ycki}, P.~T. and {Done}, C. and {Smith}, D.~A.},
+    title = "{The 1989 May outburst of the soft X-ray transient GS2023+338 (V404 Cyg)}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 1999,
+    volume = {309},
+    pages = {561-575},
+    note = {Extends the nthcomp model (blackbody-seed option this channel uses) that Zdziarski, Johnson \& Magdziarz (1996) introduced.},
+}
+
+@ARTICLE{Thomas2016,
+    author = {{Thomas}, Adam D. and {Groves}, Brent A. and {Sutherland}, Ralph S. and {Dopita}, Michael A. and {Jin}, Chichuan and {Kewley}, Lisa J.},
+    title = "{A Physically-based Model of the Ionizing Radiation from Active Galaxies for Photoionization Modeling}",
+    journal = {The Astrophysical Journal},
+    year = 2016,
+    volume = {833},
+    pages = {266},
+    doi = {10.3847/1538-4357/833/2/266},
+    note = {Software provenance for quasar_continuum/comptonization.py: this project's Python translation of donthcomp.f (not distributed standalone by HEASARC -- it is a core XSPEC built-in) is a light cleanup of A.D. Thomas's independently-published translation of the same Fortran subroutine, written for this paper's OXAF model.},
+}
+
+@ARTICLE{UrryPadovani1995,
+    author = {{Urry}, C.~Megan and {Padovani}, Paolo},
+    title = "{Unified Schemes for Radio-Loud Active Galactic Nuclei}",
+    journal = {Publications of the Astronomical Society of the Pacific},
+    year = 1995,
+    volume = {107},
+    pages = {803},
+    doi = {10.1086/133630},
+    note = {AGN unification-scheme argument (type-1 selection restricts the viewing angle to within the torus opening half-angle) motivating this channel's cosi prior range.},
+}
+
+@ARTICLE{LussoRisaliti2017,
+    author = {{Lusso}, E. and {Risaliti}, G.},
+    title = "{The tight relation between X-ray and ultraviolet luminosity of quasars}",
+    journal = {Astronomy \& Astrophysics},
+    year = 2017,
+    volume = {602},
+    pages = {A79},
+    note = {Real SDSS quasar sample (mdot~0.03-1) Kubota \& Done (2018) benchmark their model against; used here to support the eddington_ratio prior range.},
+}
+
+@ARTICLE{JinWardDone2012a,
+    author = {{Jin}, C. and {Ward}, M. and {Done}, C. and {Gelbord}, J.},
+    title = "{A combined optical and X-ray study of unobscured type 1 active galactic nuclei - I. Optical spectra and spectral energy distribution modelling}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2012,
+    volume = {420},
+    pages = {1825-1847},
+    note = {50-AGN sample Kubota \& Done (2018) Sec. 4.2 cite for the factor 2-3 scatter in L_diss,hot/L_Edd; supports this channel's hard_xray_luminosity_fraction prior.},
+}
+
+@ARTICLE{Fabian2015,
+    author = {{Fabian}, A.~C. and {Lohfink}, A. and {Kara}, E. and {Parker}, M.~L. and {Vasudevan}, R. and {Reynolds}, C.~S.},
+    title = "{Properties of AGN coronae in the NuSTAR era}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2015,
+    volume = {451},
+    pages = {4375-4383},
+    note = {Observed hot-corona electron temperature range (kTe~40-100 keV) supporting this channel's kte_hot prior.},
+}
+
+@ARTICLE{Lubinski2016,
+    author = {{Lubi{\'n}ski}, P. and {others}},
+    title = "{Average X-ray/gamma-ray spectra of Seyfert galaxies from INTEGRAL/SPI and updated composite from BeppoSAX}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2016,
+    volume = {458},
+    pages = {2454-2467},
+    note = {Corroborates the hot-corona electron temperature/optical-depth range supporting this channel's kte_hot prior.},
+}
+
+@ARTICLE{Magdziarz1998,
+    author = {{Magdziarz}, P. and {Blaes}, O.~M. and {Zdziarski}, A.~A. and {Johnson}, W.~N. and {Smith}, D.~A.},
+    title = "{Effects of ionized absorbers on X-ray/gamma-ray spectra of Seyfert galaxies}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 1998,
+    volume = {301},
+    pages = {179-192},
+    note = {One of four papers supporting the observed warm-Comptonisation electron temperature range (kTe~0.1-1 keV) this channel's kte_warm prior uses.},
+}
+
+@ARTICLE{Czerny2003,
+    author = {{Czerny}, B. and {Niko{\l}ajuk}, M. and {R{\'o}{\.z}a{\'n}ska}, A. and {Dumont}, A.-M. and {Loska}, Z. and {Zycki}, P.~T.},
+    title = "{Universal spectral shape of accreting black hole systems - II. AGN}",
+    journal = {Astronomy \& Astrophysics},
+    year = 2003,
+    volume = {412},
+    pages = {317-329},
+    note = {One of four papers supporting the observed warm-Comptonisation electron temperature range (kTe~0.1-1 keV) this channel's kte_warm prior uses.},
+}
+
+@ARTICLE{GierlinskiDone2004b,
+    author = {{Gierli{\'n}ski}, M. and {Done}, C.},
+    title = "{Is Ark 564 a narrow-line Seyfert 1 galaxy with a black hole binary-like corona?}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2004,
+    volume = {349},
+    pages = {L7-L11},
+    note = {One of four papers supporting the observed warm-Comptonisation electron temperature range (kTe~0.1-1 keV) this channel's kte_warm prior uses.},
+}
+
+@ARTICLE{Porquet2004,
+    author = {{Porquet}, D. and {Reeves}, J.~N. and {O'Brien}, P. and {Brinkmann}, W.},
+    title = "{XMM-Newton spectroscopy of the highly variable NLS1 galaxy IRAS 13224-3809}",
+    journal = {Astronomy \& Astrophysics},
+    year = 2004,
+    volume = {422},
+    pages = {85-98},
+    note = {One of four papers supporting the observed warm-Comptonisation electron temperature range (kTe~0.1-1 keV) this channel's kte_warm prior uses.},
+}
+
+@ARTICLE{Petrucci2018,
+    author = {{Petrucci}, P.-O. and {Ursini}, F. and {De Rosa}, A. and {Bianchi}, S. and {Cappi}, M. and {Matt}, G. and {Dadina}, M. and {Malzac}, J.},
+    title = "{Testing warm Comptonization models for the origin of the soft X-ray excess in AGNs}",
+    journal = {Astronomy \& Astrophysics},
+    year = 2018,
+    volume = {611},
+    pages = {A59},
+    note = {Passive-disc theoretical prediction Gamma_warm=2.5, the central value this channel's gamma_warm prior is anchored on.},
+}
+
 @ARTICLE{IyerGawiser2017,
     author = {{Iyer}, Kartheik and {Gawiser}, Eric},
     title = "{Reconstructing Star Formation Histories with Nonparametric Spline Fits}",

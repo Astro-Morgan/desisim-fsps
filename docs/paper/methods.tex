@@ -169,6 +169,126 @@ suite):
     time from order 10~s to order 1--10~ms.
 \end{itemize}
 
+\subsection{Quasar Continuum} \label{sec:quasar-continuum}
+Mirrors \texttt{src/demiurge/quasar\_continuum/}. Produces the AGN
+accretion-disk continuum -- the additive AGN contribution to the
+\texttt{continuum} bucket, alongside Section~\ref{sec:galaxy-continuum}'s
+stellar contribution. Blending the two into one composite continuum, and
+any AGN-local reddening applied before that blend, is a separate,
+not-yet-built channel.
+
+The physical model is AGNSED \citep{KubotaDone2018}, in full (not its own
+restricted special case QSOSED): an outer standard \citet{NovikovThorne1973}
+relativistic disc from $R_{\rm out}$ to $R_{\rm warm}$, an optically-thick
+warm Comptonising region from $R_{\rm warm}$ to $R_{\rm hot}$ that produces
+the soft X-ray excess, and a hot, optically-thin corona from $R_{\rm hot}$
+to the innermost stable circular orbit that produces the hard X-ray
+power-law tail, all tied together self-consistently by requiring the
+warm/hot regions' dissipated and reprocessed luminosities to balance against
+the same underlying Novikov-Thorne emissivity profile. The disc self-gravity
+radius $R_{\rm out}$ follows \citet{LaorNetzer1989}; the warm and hot-corona
+spectral shapes are computed with the thermal-Comptonisation (`nthcomp')
+model of \citet{ZdziarskiJohnsonMagdziarz1996} as extended by
+\citet{ZyckiDoneSmith1999}, using a from-scratch Python translation of the
+underlying Kompaneets-equation solve that is a light cleanup of
+\citet{Thomas2016}'s independently-published translation of the same
+Fortran subroutine (their OXAF model's supplementary code), since HEASARC
+does not distribute this specific piece (`donthcomp.f') standalone -- it is
+a core XSPEC built-in, not a community-contributed local model the way
+AGNSED/QSOSED themselves are.
+
+This implementation is a genuine reimplementation of the physics, not a
+runtime wrapper around simqso or any other external quasar-modeling
+package (the same dependency-minimization posture as
+Section~\ref{sec:galaxy-continuum}'s pretabulated grid), and was validated
+directly against the official, HEASARC-distributed Fortran source
+(\texttt{agnsed.f}/\texttt{qsosed.f}, ``now in the Heasoft release as of
+Xspec version 12.11'' per that source's own README) compiled and run
+unmodified (\texttt{gfortran -std=legacy}), rather than against any
+third-party port: the solved radial structure ($R_{\rm hot}$, $R_{\rm
+warm}$, $R_{\rm out}$, $\Gamma_{\rm hot}$, $L_{\rm diss,hot}$, $L_{\rm hot}$)
+reproduces the compiled reference to four or more decimal places, including
+for \citet{KubotaDone2018}'s own three individually-fitted AGN (NGC~5548,
+Mrk~509, PG~1115+407, their Table~2); total energy conservation across the
+disc/warm/hot partition (the summed luminosity must equal $\dot m
+L_{\rm Edd}$) holds to within a few percent (see below for a correction
+applied here that brought this down from an initially measured
+$\sim$9--13\%); and the full synthesized spectral shape and absolute
+normalization together reproduce \citet{KubotaDone2018}'s own published
+Figure~9 ($M=10^8\,M_\odot$, $\dot m=0.05$ and $0.5$, evaluated as a flux
+at their stated fiducial 100~Mpc distance and $i=45^\circ$ inclination) to
+within $\sim$2\% once compared on genuinely equal footing. One
+precisely-diagnosed bug was found in the official Fortran's own diagnostic
+print statements along the way (a variable, already correctly repurposed
+as a flux for the final output spectrum's own normalization, gets reused a
+few lines later in a temperature print statement that expects a true
+luminosity instead) -- confirmed by exactly reproducing the Fortran's
+printed value when the same variable reuse is deliberately replicated; it
+does not affect the model's actual physics or this implementation, which
+always uses the correct, undivided luminosity.
+
+A second, more consequential issue was found and, unlike the print-only
+bug above, corrected in this implementation: with reprocessing enabled,
+the official Fortran's own output spectrum double-counts a fraction of the
+disc/warm zones' photon energy. AGNSED's hot corona intercepts a
+geometric, view-factor-weighted fraction of each outer annulus's photons
+as Comptonisation seed photons, and its own luminosity $L_{\rm hot}$
+(Eq.~1 of \citealt{KubotaDone2018}) is normalized to include that
+intercepted energy -- but the disc/warm zones' own synthesized spectra
+were never reduced by the same intercepted fraction, so that energy is
+emitted in full by the disc/warm zones \emph{and} re-emitted, Comptonised,
+by the corona. This was confirmed present in the compiled reference
+Fortran itself (not introduced by this reimplementation, whose geometry
+solve reproduces \texttt{agnsed.f}/\texttt{qsosed.f}'s own intercepted-flux
+term, \texttt{seeddis}, to the same four-or-more-decimal-place accuracy
+quoted above), and is corrected here by multiplying each disc/warm
+annulus's emitted luminosity by one minus that same intercepted fraction
+before spectral synthesis, so the energy is counted once rather than
+twice. This is a deliberate departure from the reference Fortran's output
+\emph{spectrum} (its solved geometry/energetics are untouched and remain
+exact to four-plus decimal places): post-correction, total luminosity
+across the three zones lands within a few percent of $\dot m L_{\rm Edd}$
+rather than the $\sim$9--13\% excess measured before the fix, and the
+Figure~9 comparison above is quoted post-correction.
+
+Unlike the reference Fortran (and unlike a third-party Python port of
+QSOSED evaluated, and rejected as a runtime dependency, before this module
+was written -- see project history), the synthesized spectrum is built
+entirely in specific-luminosity space, with no assumed observer distance
+at any point, so that its output matches
+Section~\ref{sec:galaxy-continuum}'s own convention directly: $L_\nu$
+[$L_\odot\,\mathrm{Hz}^{-1}$] by default, $L_\lambda$
+[$L_\odot\,\mathrm{\AA}^{-1}$] via the same conversion used there. That
+third-party port's normalization bug -- silently omitting the inclination
+parameter entirely, compounded with a further disc-specific geometric
+error -- was only discovered because this project's practice is to
+validate a reimplementation against a real compiled or independently
+published reference before trusting its output, not because of any flaw
+specific to that one package.
+
+Several of the parameters below are ones QSOSED (Kubota \& Done's own
+simplified variant of AGNSED) pins at a single ``typical'' value for
+fitting faint, high-redshift quasars; here they are drawn as genuine Tier-2
+NPE-parameters instead, because \citet{KubotaDone2018} themselves report
+the measured population scatter around that typical value, not because the
+fixed value itself was wrong. In particular, the hot-corona dissipated
+luminosity fraction $L_{\rm diss,hot}/L_{\rm Edd}$ (QSOSED's hardcoded
+$0.02$) becomes a Tier-2 parameter with a real citable range
+\citep[$0.02$--$0.04$ across their three fitted AGN, consistent with the
+factor 2--3 scatter across the larger sample of][]{JinWardDone2012a}; the
+outer radius $R_{\rm hot}$ that this fraction implies is then solved for
+via the same forward-accumulation-until-threshold procedure QSOSED itself
+uses internally (walk outward from the ISCO, accumulate the disc-luminosity
+integral, and freeze $R_{\rm hot}$ the moment the running total first
+reaches the target), generalized from QSOSED's own hardcoded single target
+to any drawn value. The inclination prior ($\cos i \in [0.5, 1]$) is
+motivated by the standard AGN unification argument
+\citep{UrryPadovani1995} that type-1 (unobscured, broad-line) selection
+restricts real quasars to within the torus opening half-angle. The full
+parameter list, tiers, and citations are catalogued in
+\texttt{src/demiurge/parameters/registry.py}
+(\texttt{quasar\_continuum.agnsed.*}).
+
 \section{Discussion}
 TBD.
 

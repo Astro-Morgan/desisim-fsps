@@ -55,7 +55,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .distributions import Dirichlet, Distribution, LogUniform, Uniform
+from .distributions import Dirichlet, Distribution, LogNormal, LogUniform, Normal, Uniform
 
 
 @dataclass(frozen=True)
@@ -176,6 +176,119 @@ _add(
         units="unitless (fraction of the initial gas reservoir ultimately locked into stars by t_obs)",
         description="Efficiency epsilon setting the closed-box gas reservoir size (M_gas,initial = total_stellar_mass / epsilon), via mu(t) = 1 - epsilon * F(t).",
         rationale="Bounded (0,1) by the closed-box construction itself; the specific prior shape (uniform) is not fit to real gas-fraction observations. MAGIC.",
+    ),
+)
+
+# =============================================================================
+# quasar_continuum.agnsed -- AGN accretion-disk continuum (Kubota & Done
+# 2018, MNRAS 480, 1247; arXiv:1804.00171 -- KD18). Full-AGNSED reimplementation,
+# not QSOSED's restricted special case -- see quasar_continuum/geometry.py's
+# module docstring for the validation summary (exact match on radii/
+# luminosities against the compiled official Fortran, ~1% match on the full
+# spectral shape against KD18's own published Figure 9). Several entries
+# below are parameters QSOSED (the paper's own simplified variant) pins at
+# a single "typical" value; here they are real Tier 2 NPE-parameters because
+# KD18 itself reports the measured population scatter around that typical
+# value (their own Sec. 4.2/Table 2), not because the fixed value was wrong.
+# =============================================================================
+_add(
+    NPEParameter(
+        name="quasar_continuum.agnsed.black_hole_mass",
+        owner="quasar_continuum.agnsed",
+        tier=2,
+        physical=True,
+        distribution=LogUniform(1.0e6, 1.0e10),
+        units="Msun",
+        citation="Kubota & Done (2018, MNRAS 480, 1247) Sec. 5.1 -- the mass grid (1e6-1e10 Msun) their own full SED model was validated over.",
+        description="Supermassive black hole mass.",
+        rationale="Direct match to KD18's own explored/validated mass range, not an independently chosen bracket.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.agnsed.eddington_ratio",
+        owner="quasar_continuum.agnsed",
+        tier=2,
+        physical=True,
+        distribution=LogUniform(0.02, 1.0),
+        units="unitless (Mdot / Mdot_Edd)",
+        citation="Kubota & Done (2018, MNRAS 480, 1247) Sec. 5.1 (grid range mdot=0.03-1) and Lusso & Risaliti (2017, A&A 602, A79) -- the real SDSS quasar sample KD18 compare their model to spans mdot~0.03-1.",
+        description="Eddington ratio Mdot/Mdot_Edd.",
+        rationale="Widened slightly below KD18's own grid floor (0.02 vs 0.03) only to stay consistent with the hard_xray_luminosity_fraction prior's own low end; otherwise matches both KD18's grid and the real quasar sample it's benchmarked against.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.agnsed.spin",
+        owner="quasar_continuum.agnsed",
+        tier=3,
+        physical=True,
+        distribution=Uniform(-1.0, 0.998),
+        units="unitless (dimensionless Kerr spin a*)",
+        description="Dimensionless black hole spin.",
+        rationale="MAGIC -- spans the full range AGNSED's own parameter file (lmodel_agnsed.dat) allows; no informed population-level spin distribution imposed. KD18's own worked examples fix astar=0 throughout, so there is no in-paper guidance on a realistic spin prior shape to cite here.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.agnsed.cosi",
+        owner="quasar_continuum.agnsed",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.5, 1.0),
+        units="unitless (cosine of the disc/warm-Comptonisation inclination angle)",
+        citation="Urry & Padovani (1995, PASP 107, 803) -- the standard AGN unification argument that type-1 (unobscured broad-line) selection restricts the viewing angle to within the torus opening half-angle, canonically i <~ 60 deg.",
+        description="Cosine of the inclination angle applied to the disc and warm-Comptonisation components (agnsed.f's own cosi/0.5 geometric factor; the hot corona is treated as isotropic and unaffected).",
+        rationale="Lower bound cos(60deg)=0.5 anchors the type-1-selection argument; the exact torus opening angle is itself a real range in the unification literature (not precision-fit here), and AGNSED's own default parameter file uses cosi=0.5 as its normalization point, consistent with this being the edge of the allowed range rather than an arbitrary floor.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.agnsed.hard_xray_luminosity_fraction",
+        owner="quasar_continuum.agnsed",
+        tier=2,
+        physical=True,
+        distribution=LogUniform(0.01, 0.05),
+        units="unitless (L_diss,hot / L_Edd)",
+        citation="Kubota & Done (2018, MNRAS 480, 1247) Sec. 4.2 -- measured 0.02-0.04 L_Edd across their 3 fitted AGN (NGC 5548, Mrk 509, PG 1115+407); consistent with Jin, Ward, Done & Gelbord (2012a, MNRAS 420, 1825)'s 50-AGN sample, referenced in KD18 Sec. 4.2 as varying by only a factor 2-3 when stacked by Eddington ratio.",
+        description="Intrinsic hard X-ray (hot-corona) dissipated luminosity, as a fraction of L_Edd -- generalizes QSOSED's own hardcoded 0.02 into a real Tier-2 parameter (see quasar_continuum/geometry.py's solve_geometry docstring for the r_hot inversion this drives).",
+        rationale="LogUniform bracket set slightly wider than the 0.02-0.04 measured range to allow real population scatter beyond 3 objects, anchored directly on KD18's own reported numbers rather than an independently chosen range.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.agnsed.kte_hot",
+        owner="quasar_continuum.agnsed",
+        tier=2,
+        physical=True,
+        distribution=Uniform(40.0, 100.0),
+        units="keV",
+        citation="Fabian et al. (2015, MNRAS 451, 4375) and Lubinski et al. (2016, MNRAS 458, 2454) -- observed hot-corona electron temperature range kTe~40-100 keV, tau~1-2, cited in KD18 Sec. 1.",
+        description="Hot-corona electron temperature.",
+        rationale="Direct match to the observed range KD18 themselves cite; QSOSED's own fixed value (100 keV) is the upper edge of this range, not an independent choice.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.agnsed.kte_warm",
+        owner="quasar_continuum.agnsed",
+        tier=2,
+        physical=True,
+        distribution=LogUniform(0.1, 1.0),
+        units="keV",
+        citation="Magdziarz et al. (1998, MNRAS 301, 179), Czerny et al. (2003, A&A 412, 317), Gierlinski & Done (2004b, MNRAS 349, L7), and Porquet et al. (2004, A&A 422, 85) -- observed warm-Comptonisation electron temperature range kTe~0.1-1 keV, tau~10-25, cited in KD18 Sec. 1; consistent with KD18's own Table 2 per-object fits (0.17-0.50 keV across their 3 AGN).",
+        description="Warm-Comptonisation electron temperature.",
+        rationale="Direct match to the observed range KD18 cite; QSOSED's own fixed value (0.2 keV) sits well inside this range and inside KD18's own Table 2 fitted spread.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.agnsed.gamma_warm",
+        owner="quasar_continuum.agnsed",
+        tier=2,
+        physical=True,
+        distribution=Normal(2.5, 0.3),
+        units="unitless (photon index)",
+        citation="Petrucci et al. (2018, A&A 611, A59)'s passive-disc theoretical prediction Gamma_warm=2.5, and Kubota & Done (2018, MNRAS 480, 1247) Table 2's own per-object fits (2.28-3.06 across their 3 AGN).",
+        description="Warm-Comptonisation photon index.",
+        rationale="Normal centered on the passive-disc theoretical value (also QSOSED's own fixed default) with sigma chosen to bracket KD18's own measured per-object spread; KD18 Sec. 4.3 notes real objects deviate from the passive-disc prediction (steeper for higher mdot), consistent with real scatter rather than a single true value.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.agnsed.r_warm_over_r_hot",
+        owner="quasar_continuum.agnsed",
+        tier=2,
+        physical=True,
+        distribution=LogUniform(1.5, 4.0),
+        units="unitless (R_warm / R_hot)",
+        citation="Kubota & Done (2018, MNRAS 480, 1247) Table 2 -- their own per-object fits give R_warm/R_hot = 151/43=3.51 (NGC 5548), 40/21=1.90 (Mrk 509), 35/9.8=3.57 (PG 1115+407), Sec. 4.3.",
+        description="Ratio of the warm-Comptonisation outer radius to the hot-corona outer radius (r_hot itself is derived from hard_xray_luminosity_fraction, not drawn directly -- see geometry.py).",
+        rationale="KD18's own general-grid convention (r_warm=2*r_hot, Sec. 4.3, 'guided by the fits to individual objects') is a simplifying tie, not a measured law -- their own Table 2 per-object fits show real scatter around it (1.9-3.6), which is what this prior's range reflects directly rather than an independently chosen bracket.",
     ),
 )
 

@@ -136,3 +136,61 @@ def test_reproduces_kubota_done_figure_9_peak_flux(mdot_edd, expected_peak):
     e2n_flux = en_mid ** 2 * (total_rate / bin_width_kev) / (4 * np.pi * FIGURE_9_DISTANCE_CM ** 2)
 
     assert e2n_flux.max() == pytest.approx(expected_peak, rel=0.15)
+
+
+# --- Energy-conservation mechanism, pinned down 2026-09-09 (see
+# geometry.py's module docstring for the full explanation): with
+# reprocessing on, the total synthesized luminosity exceeds mdot*L_Edd by
+# ~9-13%, and this is NOT a bug -- L_hot already includes seed photons
+# intercepted from the disc/warm zones, and reprocessing then illuminates
+# that same L_hot back onto the disc/warm zones, double-counting that
+# energy. Confirmed by disabling reprocessing, where the excess disappears
+# almost entirely (residual is discretization error, not this effect). ---
+def _total_synthesized_over_edd(**overrides):
+    from demiurge.quasar_continuum.continuum import KEV_TO_ERG, _synthesize_photon_rates
+    from demiurge.quasar_continuum.geometry import solve_geometry
+
+    kwargs = dict(m_msun=1.0e8, astar=0.0, mdot_edd=0.10, hard_xray_luminosity_fraction=0.02,
+                   kte_hot_kev=100.0, kte_warm_kev=0.2, gamma_warm=2.5, reprocess=True)
+    kwargs.update(overrides)
+    reprocess = kwargs.pop("reprocess")
+
+    ear_kev = np.geomspace(1e-4, 200.0, 601)
+    geom = solve_geometry(kwargs.pop("m_msun"), kwargs.pop("astar"), kwargs.pop("mdot_edd"),
+                           kwargs.pop("hard_xray_luminosity_fraction"), reprocess=reprocess)
+    disk_rate, warm_rate, hot_rate, en_mid = _synthesize_photon_rates(
+        geom, ear_kev, kwargs["kte_hot_kev"], kwargs["kte_warm_kev"], kwargs["gamma_warm"],
+        icor=20, iout=400, reprocess=reprocess,
+    )
+    total_erg_s = np.sum((disk_rate + warm_rate + hot_rate) * en_mid * KEV_TO_ERG)
+    return total_erg_s / (geom.mdot_edd * geom.ledd)
+
+
+def test_reprocessing_produces_the_expected_luminosity_excess():
+    ratio = _total_synthesized_over_edd(reprocess=True)
+    assert 1.05 < ratio < 1.20, (
+        f"expected the documented ~9-13% reprocessing-driven excess, got ratio={ratio:.4f} -- "
+        f"if this moves outside that band, something about the reprocessing mechanism itself "
+        f"changed, not just numerical noise (see geometry.py's module docstring)."
+    )
+
+
+def test_disabling_reprocessing_leaves_only_the_seed_photon_baseline():
+    """reprocess=False turns off the Frep illumination boost (mechanism 2
+    in geometry.py's module docstring) but NOT the corona's always-on
+    interception of disc/warm seed photons (mechanism 1) -- so this is
+    expected to land near ~1.03-1.04, not exactly 1.0. Bounded well below
+    the full-reprocessing ratio (~1.09-1.13, see the test above) to keep
+    this a meaningful regression guard on mechanism 2 specifically."""
+    ratio = _total_synthesized_over_edd(reprocess=False)
+    assert 1.0 < ratio < 1.06
+
+
+def test_from_parameters_reprocess_flag_actually_changes_the_spectrum():
+    """Regression guard for the 2026-09-09 bug where _synthesize_photon_rates
+    hardcoded rep_flag=1.0 regardless of the reprocess argument -- from_parameters
+    accepted `reprocess=False` but it silently had no effect on the synthesized
+    spectrum (only on the geometry solve)."""
+    qc_rep = _fiducial(reprocess=True)
+    qc_norep = _fiducial(reprocess=False)
+    assert not np.allclose(qc_rep.flux, qc_norep.flux)

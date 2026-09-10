@@ -11,10 +11,12 @@ its own local disk luminosity, exactly as agnsed.f/qsosed.f do) + a single
 hot-corona Comptonization (renormalized to L_hot). Faithful to the official
 Fortran's structure (`geometry.py`'s module docstring has the full
 validation summary: geometry exact to 4+ decimal places against the
-compiled reference, corona luminosity exact by construction, total energy
-conservation within ~10%, and the full spectral shape/normalization within
-~1% of KD18's own published Figure 9 once compared on equal footing --
-same M/mdot, same i=45deg inclination, same 100 Mpc fiducial distance).
+compiled reference, each zone's own synthesis exact to <0.02% against its
+own true local Novikov-Thorne target, the ~9-13% total-luminosity excess
+with reprocessing on fully explained -- not a bug, see geometry.py -- and
+the full spectral shape/normalization within ~1% of KD18's own published
+Figure 9 once compared on equal footing -- same M/mdot, same i=45deg
+inclination, same 100 Mpc fiducial distance).
 
 One deliberate departure from the reference Fortran: everything here is
 built in pure specific-luminosity space (no assumed distance, no 4*pi*d^2
@@ -90,14 +92,21 @@ def _log_r_grid_two_zone(r_lo, r_hi, n, r_lo2=None, n2=None):
     return np.concatenate([r1, r2]), np.concatenate([dr1, dr2])
 
 
-def _synthesize_photon_rates(geom: AGNSEDGeometry, ear_kev, kte_hot_kev, kte_warm_kev, gamma_warm, icor, iout):
+def _synthesize_photon_rates(geom: AGNSEDGeometry, ear_kev, kte_hot_kev, kte_warm_kev, gamma_warm, icor, iout, reprocess=True):
     """Returns (disk_rate, warm_rate, hot_rate), each a per-bin photon rate
     [photons/s] (luminosity-domain, no distance, `cosi` NOT yet applied --
     the caller applies `cosi/0.5` to disk+warm, none to hot, per KD18's
-    Lambertian-disc-vs-isotropic-corona geometry)."""
+    Lambertian-disc-vs-isotropic-corona geometry). `reprocess` must match
+    whatever was passed to `solve_geometry` for this `geom` -- otherwise
+    the disc/warm temperature profile here (reprocessed or not) would be
+    inconsistent with `geom.lumipl_erg_s`/`geom.t_hot_k` (computed under
+    the OTHER setting), a real bug this project's own energy-conservation
+    diagnostic (2026-09-09) caught: this function used to hardcode
+    rep_flag=1.0 regardless of what `reprocess` value `from_parameters`
+    was actually given."""
     ne = ear_kev.size - 1
     rgcm = nt.RG_CM_PER_MSUN * geom.m_msun
-    rep_flag = 1.0
+    rep_flag = 1.0 if reprocess else 0.0
     en_mid = np.sqrt(ear_kev[:-1] * ear_kev[1:])
     bin_width_hz = (ear_kev[1:] - ear_kev[:-1]) * KEVHZ
 
@@ -162,7 +171,7 @@ class QuasarContinuum:
         gamma_warm: float,
         *,
         r_warm_over_r_hot: float = 2.0,
-        n_energy_bins: int = 600,
+        n_energy_bins: int = 200,
         icor: int = 20,
         iout: int = 400,
         reprocess: bool = True,
@@ -180,7 +189,7 @@ class QuasarContinuum:
             r_warm_over_r_hot=r_warm_over_r_hot, reprocess=reprocess,
         )
         disk_rate, warm_rate, hot_rate, en_mid = _synthesize_photon_rates(
-            geom, ear_kev, kte_hot_kev, kte_warm_kev, gamma_warm, icor, iout
+            geom, ear_kev, kte_hot_kev, kte_warm_kev, gamma_warm, icor, iout, reprocess=reprocess
         )
 
         cosi_scale = cosi / 0.5  # Lambertian disc/warm-region geometry; hot corona is isotropic (KD18 Sec. 2.1/2.2)

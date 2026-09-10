@@ -24,9 +24,46 @@ Fortran (unmodified, `gfortran -std=legacy`):
   the actual spectrum, and this module always uses the true, undivided
   luminosity (matching what the real per-annulus spectral synthesis in
   `spectrum.py` uses).
-- The spectral assembly built on top of this geometry (see `spectrum.py`)
+- The spectral assembly built on top of this geometry (see `continuum.py`)
   independently reproduces KD18's own Figure 9 (M=1e8 Msun, mdot=0.05 and
   0.5, E^2 N(E) at 100 Mpc, i=45deg) to ~1% once compared on equal footing.
+- With `reprocess=True` (the default), the disc+warm+hot spectrum's total
+  integrated luminosity exceeds mdot*L_Edd by ~9-13% (2026-09-09 staged
+  diagnostic, `scripts/benchmark_quasar_continuum_resolution.py`'s own
+  findings section has the numbers) -- confirmed NOT a numerical bug: each
+  zone's synthesis independently reproduces its own true local
+  Novikov-Thorne-emissivity integral to <0.02%, and the excess is
+  reproduced almost exactly (1.088 measured vs. 1.088 predicted) just by
+  summing each zone's TRUE reprocessed target directly, with no
+  Comptonization/binning machinery involved at all. The real mechanism:
+  `L_hot` (`lumipl_erg_s`) already includes seed photons intercepted
+  *from* the disc/warm zones (KD18 eq. 1); with reprocessing on, that same
+  `L_hot` then illuminates *back* onto the disc/warm zones (KD18 eq. 5,
+  `Frep`), boosting their own local luminosity a second time with energy
+  that was already counted once. This is a real feature of how KD18
+  define each zone's "local luminosity" once reprocessing redistributes
+  energy between zones, faithfully reproduced from the official Fortran
+  (which does the identical calculation) -- not an error introduced by
+  this reimplementation.
+
+  Two distinct, separately-confirmed mechanisms contribute, not one:
+  (1) `L_seed` (the corona intercepting ambient disc/warm photons as
+  Comptonization seed photons) is *always* added to `L_hot`'s tally
+  regardless of `reprocess`, without ever being subtracted from the disc/
+  warm zones' own emitted luminosity -- confirmed by disabling
+  reprocessing entirely and still finding a real, non-zero, resolution-
+  independent excess (~3-4% in a fiducial M=1e8/mdot=0.10 case, matching
+  `L_seed`/target almost exactly). (2) The `Frep` illumination boost
+  itself, only active when `reprocess=True`, is the dominant remaining
+  contribution to the full ~9-13% figure on top of mechanism (1)'s
+  baseline. Neither is a numerical bug -- both are inherent to how the
+  official model defines "local luminosity" once any cross-zone energy
+  exchange (interception or illumination) is included; the model's actual
+  energy-conservation guarantee lives at the level of the intrinsic
+  Novikov-Thorne dissipation integral alone (confirmed to sum to
+  mdot*L_Edd to <0.1%, limited only by the radial grid's own Riemann-sum
+  precision), not at the level of each zone's fully-dressed emitted
+  luminosity once seed-photon interception and reprocessing are folded in.
 """
 from __future__ import annotations
 

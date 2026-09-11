@@ -33,17 +33,16 @@ exactly that additional, distinct, steeper component separately). `theta2`
 (UV bump) and `theta3` (grey floor) are fixed at 0.0 here (not drawn) per
 that same bump-free finding -- see `registry.py`'s rationale.
 
-`transmission()` uses `dust.curve.transmission_with_floor`, NOT the bare
-`transmission` -- this curve is not applied below the Lyman limit (~912A):
-that is a real physical domain boundary (dust-grain UV/optical extinction
-vs. photoelectric/Compton X-ray absorption, a distinct, deliberately
-not-yet-built mechanism), not a numerically-convenient cutoff. See
-`dust.curve`'s module docstring for the two wrong fixes tried before this
-one (a floor combined with an unrealistic theta1 range; a smooth but
-physically-ungrounded saturation constant) and why torus_reddening's own
-theta1 range (already Gaskell-et-al.-2004-anchored, well below the
-SMC-bar ceiling that forced host_disk_reddening's range down) was never
-actually the problem.
+`transmission()` uses `dust.curve.transmission_with_floor`, which holds
+k(lambda) flat at its own already-calibrated value below the Lyman limit
+(~912A) rather than extrapolating further or resetting to full
+transparency -- perfectly continuous, no new constant. See `dust.curve`'s
+module docstring for the three fixes tried before this one and why a hard
+on/off cutoff (whatever theta1 range it's paired with) is not how any real
+physical mechanism behaves at a boundary this curve has no actual feature
+at. torus_reddening's own theta1 range (already Gaskell-et-al.-2004-
+anchored, well below the SMC-bar ceiling host_disk_reddening's range
+needed) was never the problem.
 """
 from __future__ import annotations
 
@@ -52,7 +51,7 @@ from typing import Optional
 
 import numpy as np
 
-from ..dust.curve import k_lambda, transmission_with_floor
+from ..dust.curve import transmission_with_floor
 from ..parameters.samplers import ParameterSampler, PriorSampler
 
 _COVERING_ANGLE_COSINE = "quasar_continuum.torus_reddening.covering_angle_cosine"
@@ -79,8 +78,7 @@ class TorusReddeningResult:
         wave = np.asarray(wave, dtype=float)
         if not self.intercepted:
             return np.ones_like(wave)
-        k = k_lambda(wave, self.theta0_amplitude, self.theta1_slope, theta2=0.0, theta3=0.0)
-        return transmission_with_floor(wave, k)
+        return transmission_with_floor(wave, self.theta0_amplitude, self.theta1_slope, theta2=0.0, theta3=0.0)
 
 
 def draw_torus_reddening(

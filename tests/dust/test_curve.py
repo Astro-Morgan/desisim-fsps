@@ -6,6 +6,7 @@ from demiurge.dust.curve import (
     VALIDITY_FLOOR_AA,
     drude,
     k_lambda,
+    k_lambda_with_floor,
     transmission,
     transmission_with_floor,
 )
@@ -69,31 +70,52 @@ def test_bump_adds_local_excess_at_bump_center():
     assert k_with_bump[0] == pytest.approx(k_no_bump[0] + 0.5)
 
 
-def test_transmission_with_floor_is_unclamped_above_the_floor():
+def test_k_lambda_with_floor_matches_raw_k_above_the_floor():
     wave = np.array([VALIDITY_FLOOR_AA, 5500.0, 10000.0])
-    k = k_lambda(wave, theta0=1.0, theta1=1.0, theta2=0.0, theta3=0.0)
-    np.testing.assert_array_equal(transmission_with_floor(wave, k), transmission(k))
+    np.testing.assert_array_equal(
+        k_lambda_with_floor(wave, 1.0, 1.0), k_lambda(wave, 1.0, 1.0)
+    )
 
 
-def test_transmission_with_floor_is_exactly_one_below_the_floor():
+def test_k_lambda_with_floor_holds_the_boundary_value_below_the_floor():
+    # Below the floor, k is held FLAT at its own real value AT the floor --
+    # not reset to zero (which would mean "no reddening," an equally
+    # arbitrary claim) and not left to keep diverging.
+    boundary_k = k_lambda(np.array([VALIDITY_FLOOR_AA]), 1.0, 1.3)[0]
     wave = np.array([0.06, 1.0, 100.0, 500.0, 911.9])
-    k = k_lambda(wave, theta0=1.0, theta1=1.3, theta2=0.0, theta3=0.0)
-    t = transmission_with_floor(wave, k)
-    np.testing.assert_array_equal(t, np.ones_like(wave))
+    k = k_lambda_with_floor(wave, 1.0, 1.3)
+    np.testing.assert_allclose(k, boundary_k)
 
 
-def test_transmission_with_floor_transitions_at_the_floor():
-    just_below = transmission_with_floor(
-        np.array([VALIDITY_FLOOR_AA - 0.1]), k_lambda(np.array([VALIDITY_FLOOR_AA - 0.1]), 1.0, 1.0)
-    )
-    just_above = transmission_with_floor(
-        np.array([VALIDITY_FLOOR_AA + 0.1]), k_lambda(np.array([VALIDITY_FLOOR_AA + 0.1]), 1.0, 1.0)
-    )
-    assert just_below[0] == 1.0
-    assert just_above[0] < 1.0
+def test_transmission_with_floor_is_perfectly_continuous_at_the_boundary():
+    # The whole point of this fix: no discontinuity anywhere, for any
+    # theta -- not "a smaller jump," an ACTUAL zero jump, verified
+    # numerically rather than assumed.
+    just_below = transmission_with_floor(np.array([VALIDITY_FLOOR_AA - 1e-6]), 1.0, 1.3)
+    just_above = transmission_with_floor(np.array([VALIDITY_FLOOR_AA + 1e-6]), 1.0, 1.3)
+    np.testing.assert_allclose(just_below, just_above, rtol=1e-6)
 
 
-def test_realistic_theta1_ceiling_gives_a_modest_jump_at_the_floor_not_a_cliff():
+def test_transmission_with_floor_is_flat_below_the_floor_for_a_steep_slope():
+    # Reproduces the exact case that originally surfaced this whole chain
+    # of fixes (theta1=1.897, once a real registered draw): whatever the
+    # slope, transmission below the floor must be perfectly flat, not
+    # diverging (the original bug) and not a step to 1.0 (the first wrong
+    # fix).
+    wave = np.linspace(0.06, VALIDITY_FLOOR_AA, 2000)
+    t = transmission_with_floor(wave, 0.166, 1.897)
+    assert np.all(np.isfinite(t))
+    np.testing.assert_allclose(t, t[0], rtol=1e-9)
+
+
+def test_transmission_with_floor_unclamped_behavior_continues_above_the_floor():
+    wave = np.linspace(VALIDITY_FLOOR_AA, 10000.0, 500)
+    t = transmission_with_floor(wave, 1.0, 1.0)
+    np.testing.assert_allclose(t, transmission(k_lambda(wave, 1.0, 1.0)))
+    assert np.all(np.diff(t) > 0.0)  # transmission rises with wavelength (less reddening redward)
+
+
+def test_realistic_theta1_ceiling_gives_a_modest_floor_value_not_near_total_extinction():
     # host_disk_reddening's registered theta1_slope ceiling is now 1.3
     # (Prevot et al. 1984's real SMC-bar measurement, n~1.2, plus a small
     # margin) -- confirms the fix actually addresses the root cause found
@@ -101,6 +123,5 @@ def test_realistic_theta1_ceiling_gives_a_modest_jump_at_the_floor_not_a_cliff()
     # combination should no longer produce anything close to the ~99% jump
     # the old, unchecked Uniform(0,2) range allowed.
     theta0, theta1 = 0.166, 1.3  # theta0 matches the real draw that surfaced the original bug
-    k_at_floor = k_lambda(np.array([VALIDITY_FLOOR_AA]), theta0, theta1)[0]
-    t_at_floor = transmission(k_at_floor)
+    t_at_floor = transmission_with_floor(np.array([VALIDITY_FLOOR_AA]), theta0, theta1)[0]
     assert t_at_floor > 0.1  # a modest dimming, nowhere near the old ~0.01

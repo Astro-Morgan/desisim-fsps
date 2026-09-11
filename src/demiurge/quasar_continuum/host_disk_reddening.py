@@ -39,24 +39,21 @@ still shows a nonzero (minimum) reddening under the path-length law below --
 exact zero only ever comes from a dust-free `av_faceon` draw, not from
 inclination alone.
 
-`transmission()` uses `dust.curve.transmission_with_floor`, NOT the bare
-`transmission` -- this curve is not applied below the Lyman limit (~912A),
-a real physical domain boundary (dust-grain UV/optical extinction vs.
-photoelectric/Compton X-ray absorption, a distinct, deliberately
-not-yet-built mechanism). `theta1_slope`'s own registered range (below)
-was ALSO narrowed, from an unchecked `Uniform(0,2)` inherited wholesale
-from main's general-reach convention to `Uniform(0,1.3)`, anchored on
-Prevot et al. (1984, A&A 132, 389)'s real measured SMC-bar far-UV
-power-law index (n~1.2) -- the steepest well-established Local Group
-extinction curve. That range was the actual root cause of a real bug found
-via visual verification of the blended composite (2026-09-11): a draw near
-the OLD range's top (1.897 -- steeper than the steepest real curve ever
-measured) extrapolated as a bare power law all the way to the Lyman limit
-already reached k~5/T~0.01 there, a ~99% jump. With the corrected range, a
-floor at the Lyman limit produces a modest, physically defensible
-discontinuity instead -- see `dust.curve`'s module docstring for the two
-wrong fixes (floor alone; a smooth but ungrounded saturation constant)
-tried and discarded before this one.
+`transmission()` uses `dust.curve.transmission_with_floor`, which holds
+k(lambda) flat at its own already-calibrated value below the Lyman limit
+(~912A) rather than extrapolating further or resetting to full
+transparency -- perfectly continuous, no new constant (see `dust.curve`'s
+module docstring for the three fixes tried before this one). `theta1_slope`'s
+own registered range (below) is separately narrowed, from an unchecked
+`Uniform(0,2)` inherited wholesale from main's general-reach convention to
+`Uniform(0,1.3)`, anchored on Prevot et al. (1984, A&A 132, 389)'s real
+measured SMC-bar far-UV power-law index (n~1.2) -- the steepest
+well-established Local Group extinction curve. That range was the actual
+root cause of the original bug found via visual verification of the
+blended composite (2026-09-11): a draw near the OLD range's top (1.897 --
+steeper than the steepest real curve ever measured) extrapolated as a bare
+power law reached k~5/T~0.01 by the Lyman limit -- worth keeping fixed
+independent of how the domain boundary itself is handled.
 """
 from __future__ import annotations
 
@@ -65,7 +62,7 @@ from typing import Optional
 
 import numpy as np
 
-from ..dust.curve import k_lambda, transmission_with_floor
+from ..dust.curve import transmission_with_floor
 from ..parameters.samplers import ParameterSampler, PriorSampler
 
 _COSI_DISK = "quasar_continuum.host_disk_reddening.cosi_disk"
@@ -109,8 +106,7 @@ class HostDiskReddeningResult:
         wave = np.asarray(wave, dtype=float)
         if self.av_faceon == 0.0:
             return np.ones_like(wave)
-        k = k_lambda(wave, self.av, self.theta1_slope, theta2=0.0, theta3=0.0)
-        return transmission_with_floor(wave, k)
+        return transmission_with_floor(wave, self.av, self.theta1_slope, theta2=0.0, theta3=0.0)
 
 
 def draw_host_disk_reddening(

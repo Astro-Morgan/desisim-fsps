@@ -390,6 +390,28 @@ _add(
 # host_disk_reddening.py.
 
 # =============================================================================
+# blending -- composes galaxy_continuum and quasar_continuum into one mock
+# (blending/continuum.py). quasar_frac is NOT a physical property of any
+# single real source (a real observed spectrum carries no ground-truth
+# quasar_frac label to condition on -- it is a quantity fit FROM a
+# spectrum, e.g. X-CIGALE's fracAGN, never supplied as one); it is a
+# dataset-construction/generation control, ensuring full user-dialable and
+# training-set coverage of the blend axis. physical=False accordingly.
+# =============================================================================
+_add(
+    NPEParameter(
+        name="blending.quasar_frac",
+        owner="blending",
+        tier=3,
+        physical=False,
+        distribution=Uniform(0.0, 1.0),
+        units="unitless (fraction of total BOLOMETRIC luminosity contributed by the quasar channel)",
+        description="Composite-mock blend control -- see blending/continuum.py's module docstring for the exact rescale mechanism (symmetric, total-luminosity-preserving; the achieved bolometric fraction equals this value exactly at every point in [0,1], not only at the edges).",
+        rationale="Uninformed Uniform(0,1) exists to give automated mock generation full coverage of the blend space, not to reflect any real observed AGN/host luminosity-fraction population distribution (which is itself a fitted, survey-selection-dependent quantity -- anchoring to one such survey's histogram would bias training coverage toward that survey's selection function).",
+    ),
+)
+
+# =============================================================================
 # Real channel parameters get added here, one channel at a time, alongside
 # that channel's actual module -- see the module docstring above.
 # =============================================================================

@@ -380,6 +380,55 @@ revisit if a specific need arises. Full parameter list in
 \texttt{src/demiurge/parameters/registry.py}
 (\texttt{quasar\_continuum.host\_disk\_reddening.*}).
 
+\section{Blending}
+\label{sec:blending}
+
+\texttt{blending.continuum.blend\_continua} composes
+Section~\ref{sec:galaxy-continuum}'s stellar continuum and
+Section~\ref{sec:quasar-continuum}'s AGN continuum into one composite mock,
+weighted by \texttt{blending.quasar\_frac} -- the fraction of
+\emph{bolometric} luminosity (each channel's own native, full-spectrum
+integral) associated with the quasar's accretion physics/SED. This
+generalizes an initially simpler proposal
+($\texttt{quasar\_frac}\times\text{quasar} +
+(1-\texttt{quasar\_frac})\times\text{galaxy}$, applied directly to each
+channel's raw output) that implicitly assumed both channels were already on
+a common flux scale; they are not, since each is independently normalized
+from its own real physical parameters (galaxy: total stellar mass; quasar:
+black hole mass $\times$ Eddington ratio, tied to $\dot m L_{\rm Edd}$) with
+no imposed relation between the two.
+
+Mechanism -- a symmetric, total-luminosity-preserving rescale:
+\begin{align}
+    L_{\rm bol,gal} &= \int L_{\nu,\rm gal}\,d\nu \quad\text{(galaxy's own native grid)}\\
+    L_{\rm bol,qso} &= \int L_{\nu,\rm qso}\,d\nu \quad\text{(quasar's own native grid, BEFORE reddening)}\\
+    L_{\rm bol,total} &= L_{\rm bol,gal} + L_{\rm bol,qso}\\
+    c_{\rm gal} &= (1-\texttt{quasar\_frac})\, L_{\rm bol,total}/L_{\rm bol,gal}\\
+    c_{\rm qso} &= \texttt{quasar\_frac}\, L_{\rm bol,total}/L_{\rm bol,qso}
+\end{align}
+with the final composite $c_{\rm gal} L_{\lambda,\rm gal} + c_{\rm qso}
+L_{\lambda,\rm qso} T_{\rm torus} T_{\rm hostdisk}$ (reddening, if any,
+applied only to the quasar component, AFTER this rescale -- the bolometric
+fraction describes the intrinsic accretion-power budget, not how obscured
+this particular mock's view of it happens to be). By construction, verified
+directly rather than merely asserted (\texttt{tests/blending/}), the
+composite's actual achieved bolometric fraction equals
+\texttt{quasar\_frac} exactly at every value in $[0,1]$, not only the
+edges, and the rescale is singularity-free across the full range (holding
+either channel fixed at its own native scale instead moves the singularity
+to the opposite edge). One deliberate, flagged consequence:
+\texttt{quasar\_frac}$=0$ gives exactly zero quasar contribution but
+rescales the galaxy component to $L_{\rm bol,total}$ rather than its own
+untouched native output (symmetrically at $\texttt{quasar\_frac}=1$) --
+absolute brightness is not preserved at either edge, only composition,
+consistent with this project's expectation that the composite will be
+renormalized for magnitude invariance downstream regardless.
+\texttt{quasar\_frac} itself (\texttt{blending.quasar\_frac}, Tier 3,
+$\mathrm{Uniform}(0,1)$) is \texttt{physical=False}: it is a
+dataset-construction/generation control, not a property any real observed
+spectrum carries a ground-truth label for (a real spectrum's AGN fraction
+is a quantity fit \emph{from} it, never supplied as an input).
+
 \section{Discussion}
 TBD.
 

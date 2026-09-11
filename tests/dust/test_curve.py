@@ -1,7 +1,14 @@
 import numpy as np
 import pytest
 
-from demiurge.dust.curve import LAMBDA_V, VALIDITY_FLOOR_AA, drude, k_lambda, transmission, transmission_with_floor
+from demiurge.dust.curve import (
+    LAMBDA_V,
+    VALIDITY_FLOOR_AA,
+    drude,
+    k_lambda,
+    transmission,
+    transmission_with_floor,
+)
 
 WAVE = np.linspace(1000.0, 10000.0, 500)
 
@@ -69,13 +76,8 @@ def test_transmission_with_floor_is_unclamped_above_the_floor():
 
 
 def test_transmission_with_floor_is_exactly_one_below_the_floor():
-    # A steep, real-registered-range theta1 that would otherwise blow up
-    # k(lambda) catastrophically when naively extrapolated into the EUV/
-    # X-ray (this reproduces the exact failure mode found via visual
-    # verification of the blended quasar continuum, 2026-09-11: k~330,
-    # T~1e-133 at 100A, before this floor existed).
     wave = np.array([0.06, 1.0, 100.0, 500.0, 911.9])
-    k = k_lambda(wave, theta0=0.166, theta1=1.897, theta2=0.0, theta3=0.0)
+    k = k_lambda(wave, theta0=1.0, theta1=1.3, theta2=0.0, theta3=0.0)
     t = transmission_with_floor(wave, k)
     np.testing.assert_array_equal(t, np.ones_like(wave))
 
@@ -89,3 +91,16 @@ def test_transmission_with_floor_transitions_at_the_floor():
     )
     assert just_below[0] == 1.0
     assert just_above[0] < 1.0
+
+
+def test_realistic_theta1_ceiling_gives_a_modest_jump_at_the_floor_not_a_cliff():
+    # host_disk_reddening's registered theta1_slope ceiling is now 1.3
+    # (Prevot et al. 1984's real SMC-bar measurement, n~1.2, plus a small
+    # margin) -- confirms the fix actually addresses the root cause found
+    # via visual verification (2026-09-11): a real, in-range theta0/theta1
+    # combination should no longer produce anything close to the ~99% jump
+    # the old, unchecked Uniform(0,2) range allowed.
+    theta0, theta1 = 0.166, 1.3  # theta0 matches the real draw that surfaced the original bug
+    k_at_floor = k_lambda(np.array([VALIDITY_FLOOR_AA]), theta0, theta1)[0]
+    t_at_floor = transmission(k_at_floor)
+    assert t_at_floor > 0.1  # a modest dimming, nowhere near the old ~0.01

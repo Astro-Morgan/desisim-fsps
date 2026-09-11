@@ -380,11 +380,23 @@ host is genuinely dust-free" -- a real, independent-of-inclination
 population fact this project's other continuous families (LogUniform,
 LogNormal) structurally exclude. The reddening curve reuses
 $k(\lambda) = \theta_0 (\lambda/\lambda_V)^{-\theta_1}$ from
-Section~\ref{sec:torus-reddening} with $\theta_0 = A_{V,\rm faceon} \times$
-the path-length factor, but a wider $\theta_1 \sim \mathrm{Uniform}(0, 2)$
-slope range than the torus's -- this is ordinary host-galaxy ISM dust, not
-AGN-processed nuclear dust, so it is not restricted to the torus's
-narrower flat/SMC-like family. $\theta_2$ (UV bump) and $\theta_3$ (grey
+Section~\ref{sec:torus-reddening} (same $912\,\mathrm{\AA}$ floor) with
+$\theta_0 = A_{V,\rm faceon} \times$ the path-length factor, and a wider
+$\theta_1 \sim \mathrm{Uniform}(0, 1.3)$ slope range than the torus's --
+this is ordinary host-galaxy ISM dust, not AGN-processed nuclear dust, so
+it is not restricted to the torus's narrower flat/SMC-like family. This
+range was revised 2026-09-11: an earlier $\mathrm{Uniform}(0,2)$ (reused
+wholesale from \texttt{main}'s general-reach "fit any real curve"
+convention, appropriate for fitting empirical curves over their own
+measured range but never checked against extrapolating the same slope as
+a bare power law all the way to the Lyman limit) let a real
+$\theta_1=1.897$ draw -- steeper than the steepest well-established Local
+Group extinction curve ever measured -- produce a $\sim$99\% flux
+discontinuity at the floor (found via visual verification of the blended
+composite). \citet{PrevotEtAl1984} measure the SMC bar's far-UV power-law
+index at $n\sim1.2$; $\mathrm{Uniform}(0, 1.3)$ keeps a small margin above
+that real ceiling rather than an unchecked generic bracket, and is now
+Tier 2 rather than MAGIC. $\theta_2$ (UV bump) and $\theta_3$ (grey
 floor) are fixed at zero for this first pass, but -- unlike the torus case
 -- this is a deliberate scope-narrowing choice, not a bump-free physical
 finding (ordinary ISM dust genuinely can show a real 2175\,\AA\ bump);

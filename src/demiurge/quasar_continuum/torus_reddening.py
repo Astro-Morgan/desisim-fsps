@@ -34,11 +34,16 @@ exactly that additional, distinct, steeper component separately). `theta2`
 that same bump-free finding -- see `registry.py`'s rationale.
 
 `transmission()` uses `dust.curve.transmission_with_floor`, NOT the bare
-`transmission` -- this curve is not applied below ~912A (see that module's
-"Validity floor" note): quasar_continuum's native grid reaches into the
-EUV/X-ray, far outside where any UV/optical dust curve means anything, and
-naively extrapolating the power-law term there crushes the transmission to
-numerical noise that has nothing to do with real physics.
+`transmission` -- this curve is not applied below the Lyman limit (~912A):
+that is a real physical domain boundary (dust-grain UV/optical extinction
+vs. photoelectric/Compton X-ray absorption, a distinct, deliberately
+not-yet-built mechanism), not a numerically-convenient cutoff. See
+`dust.curve`'s module docstring for the two wrong fixes tried before this
+one (a floor combined with an unrealistic theta1 range; a smooth but
+physically-ungrounded saturation constant) and why torus_reddening's own
+theta1 range (already Gaskell-et-al.-2004-anchored, well below the
+SMC-bar ceiling that forced host_disk_reddening's range down) was never
+actually the problem.
 """
 from __future__ import annotations
 

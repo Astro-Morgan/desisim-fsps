@@ -40,14 +40,23 @@ exact zero only ever comes from a dust-free `av_faceon` draw, not from
 inclination alone.
 
 `transmission()` uses `dust.curve.transmission_with_floor`, NOT the bare
-`transmission` -- this curve is not applied below ~912A (see that module's
-"Validity floor" note): quasar_continuum's native grid reaches into the
-EUV/X-ray, far outside where any UV/optical dust curve means anything, and
-naively extrapolating the power-law term there crushes the transmission to
-numerical noise that has nothing to do with real physics (found via visual
-verification of the blended composite, 2026-09-11 -- a real theta1_slope
-draw near the top of this module's registered range produced transmission
-~1e-133 at 100A).
+`transmission` -- this curve is not applied below the Lyman limit (~912A),
+a real physical domain boundary (dust-grain UV/optical extinction vs.
+photoelectric/Compton X-ray absorption, a distinct, deliberately
+not-yet-built mechanism). `theta1_slope`'s own registered range (below)
+was ALSO narrowed, from an unchecked `Uniform(0,2)` inherited wholesale
+from main's general-reach convention to `Uniform(0,1.3)`, anchored on
+Prevot et al. (1984, A&A 132, 389)'s real measured SMC-bar far-UV
+power-law index (n~1.2) -- the steepest well-established Local Group
+extinction curve. That range was the actual root cause of a real bug found
+via visual verification of the blended composite (2026-09-11): a draw near
+the OLD range's top (1.897 -- steeper than the steepest real curve ever
+measured) extrapolated as a bare power law all the way to the Lyman limit
+already reached k~5/T~0.01 there, a ~99% jump. With the corrected range, a
+floor at the Lyman limit produces a modest, physically defensible
+discontinuity instead -- see `dust.curve`'s module docstring for the two
+wrong fixes (floor alone; a smooth but ungrounded saturation constant)
+tried and discarded before this one.
 """
 from __future__ import annotations
 

@@ -372,12 +372,13 @@ _add(
     NPEParameter(
         name="quasar_continuum.host_disk_reddening.theta1_slope",
         owner="quasar_continuum.host_disk_reddening",
-        tier=3,
+        tier=2,
         physical=True,
-        distribution=Uniform(0.0, 2.0),
+        distribution=Uniform(0.0, 1.3),
         units="unitless (dust.curve.k_lambda's theta1, power-law slope)",
-        description="Power-law steepness of the host-disk-local reddening curve -- ordinary host-galaxy ISM dust, not AGN-processed nuclear dust, so not restricted to torus_reddening's narrower flat/SMC-like range.",
-        rationale="MAGIC -- reuses main's own general-reach theta1 bracket (Calzetti-like through steep SMC-like) since this is ordinary ISM dust, not yet independently re-derived for this specific host-disk-local context.",
+        citation="Prevot, Lequeux, Maurice, Prevot & Rocca-Volmerange (1984, A&A 132, 389) -- the SMC bar extinction curve, the steepest well-established Local Group extinction law, has a measured far-UV power-law index of n~1.2.",
+        description="Power-law steepness of the host-disk-local reddening curve -- ordinary host-galaxy ISM dust, not AGN-processed nuclear dust, so not restricted to torus_reddening's narrower flat/SMC-like range, but bounded at the steepest real measured curve rather than an unchecked generic bracket.",
+        rationale="Narrowed 2026-09-11 from an earlier Uniform(0,2) (MAGIC, reused wholesale from main's general-reach 'fit any real curve' bracket, appropriate for main's own use case but never checked against extrapolating the SAME slope as a bare power law all the way to the Lyman limit) -- a real theta1=1.897 draw under that range, steeper than the steepest real curve ever measured, produced a ~99% flux discontinuity at dust.curve.VALIDITY_FLOOR_AA (found via visual verification of the blended composite). Uniform(0, 1.3) keeps a small margin above Prevot et al.'s own n~1.2 rather than treating it as a hard ceiling no real population could ever exceed.",
     ),
 )
 # theta2 (UV bump) and theta3 (grey floor) are fixed at 0.0 here for this

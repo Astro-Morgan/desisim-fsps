@@ -25,21 +25,62 @@ T(lambda) = 10^(-0.4*k(lambda)) multiplies the intrinsic flux; a caller that
 needs the ground-truth deficit as its own additive channel uses
 `flux_in * (T - 1)`, which is <= 0 everywhere for k >= 0.
 
-Validity floor (2026-09-11, found via visual verification of the blended
-quasar continuum, not anticipated in advance): this is a UV/optical dust
-extinction curve, calibrated against real measurements only down to
-roughly the Lyman limit at best. `quasar_continuum`'s own native grid
-extends far into the EUV/X-ray (AGNSED's energy grid reaches ~0.06A). A
-naive power-law k(lambda) with theta1 > 0 DIVERGES as lambda -> 0 --
-evaluating it there is extrapolating the curve many orders of magnitude
-past where it means anything, and produces a transmission crushed to ~0
-(observed: k~330, T~1e-133 at 100A for a real registered theta1 draw) that
-has nothing to do with real physics -- X-ray absorption is a separate,
-deliberately not-yet-built mechanism (photoelectric/Compton opacity, not
-dust extinction; see quasar_continuum design docs), not something this
-curve family should silently claim to already cover by extrapolation.
-`transmission_with_floor` (not the bare `transmission`) is what
-torus_reddening.py/host_disk_reddening.py actually call.
+Domain of application (2026-09-11, revised twice this same day -- read this
+before touching VALIDITY_FLOOR_AA or either caller's theta1 range again):
+this is a UV/optical dust extinction curve. `quasar_continuum`'s own
+native grid extends far into the EUV/X-ray (AGNSED's energy grid reaches
+~0.06A), where the physically relevant absorption mechanism is
+photoelectric/Compton opacity acting on gas column density -- a distinct
+process from UV/optical dust-grain absorption/scattering, not something
+this curve claims to model (X-ray absorption is a separate, deliberately
+not-yet-built mechanism -- see quasar_continuum design docs). A naive
+power-law k(lambda) with theta1 > 0 also mathematically DIVERGES as
+lambda -> 0, which compounds the domain-mismatch with a real numerical
+blow-up if evaluated carelessly.
+
+Two wrong fixes were tried and discarded before this one, both found via
+visual verification of the blended composite -- worth knowing so a future
+change doesn't repeat either mistake:
+1. A hard wavelength floor at 912A (the Lyman limit) with NO other change:
+   mathematically stops the divergence, but for a real, in-registered-range
+   theta1 draw (host_disk_reddening's theta1_slope=1.897, drawn from what
+   was then a Uniform(0,2) prior), the curve's own RAW value already
+   reached k~5 (T~0.01, ~99% attenuated) by 912A -- a factor of only ~6 in
+   wavelength from lambda_v. The floor didn't prevent a discontinuity, it
+   relocated it: transmission jumped from exactly 1.0 to ~0.01 within one
+   wavelength grid step, a real, visually-obvious, unphysical-looking step
+   in the composite spectrum -- because the underlying curve had already
+   run away well before the floor engaged, not because of where the floor
+   itself sat.
+2. Smoothly saturating k(lambda) at a fixed ceiling (`K_SATURATION`,
+   nominally chosen so T~1e-4 "already fully dark"): removes the
+   discontinuity, but introduces exactly the kind of ungrounded MAGIC
+   constant this project's citation discipline exists to avoid -- correctly
+   flagged as such (PI direction, 2026-09-11) rather than accepted.
+
+Real fix, addressing the actual root cause identified above: the registered
+theta1_slope range this curve was being evaluated with was itself
+unrealistic, not merely "extrapolated." host_disk_reddening's Uniform(0,2)
+was inherited wholesale from main's own general-reach "fit any real curve"
+convention -- appropriate for main's own use case (fitting empirical
+curves over their own measured range), but never checked against what
+happens when the SAME slope is extrapolated as a bare power law all the
+way to the Lyman limit. Prevot, Lequeux, Maurice, Prevot & Rocca-Volmerange
+(1984, A&A 132, 389) measure the steepest well-established Local Group
+extinction curve (the SMC bar) to have a far-UV power-law index of
+n~1.2 -- host_disk_reddening's theta1_slope is now bounded at that real,
+citable ceiling (Uniform(0, 1.3), Tier 2, replacing the former Tier-3
+MAGIC range) rather than main's unchecked, generic 2.0. With that
+realistic ceiling, VALIDITY_FLOOR_AA (restored, a genuine physical
+boundary -- dust-grain physics does not apply past the Lyman limit,
+whatever the mechanism below it turns out to be) produces a modest,
+physically defensible discontinuity at 912A (at most a few-fold dimming
+for a typical draw, not ~100x) -- qualitatively similar to how real
+Lyman-limit systems/DLAs genuinely do show a sharp, real spectral feature
+at this exact wavelength, not an artifact to be smoothed away.
+torus_reddening's own theta1_slope range (Uniform(0, 0.8), already
+citation-anchored on Gaskell et al. 2004's flatter-than-SMC finding) was
+already well inside this bound and needed no change.
 """
 from __future__ import annotations
 
@@ -50,14 +91,13 @@ import numpy as np
 # theta0 retains the same "amplitude near V-band" meaning as that reference.
 LAMBDA_V = 5500.0
 
-# (Y) MAGIC: below this wavelength [Angstrom], this curve family is not
-# applied at all (transmission clamped to 1.0) -- see "Validity floor"
-# above. Anchored on the Lyman limit (912A) as a physically meaningful
-# boundary (ionizing photons couple to entirely different absorption
-# physics), not a precision fit to any specific extinction-curve library's
-# own empirically-calibrated range (several real UV curves, e.g. CCM89,
-# are only actually measured down to ~1000-1200A in practice -- 912A is a
-# defensible, not a precision-tuned, choice).
+# Below this wavelength [Angstrom], this curve is not applied at all
+# (transmission fixed at 1.0) -- see module docstring's "Domain of
+# application" note. Anchored on the Lyman limit: a real physical boundary
+# (photoionizing photons couple to gas via photoelectric/Compton opacity,
+# not dust-grain absorption/scattering), not a numerically-convenient
+# cutoff -- the discontinuity this produces is a real, deliberate domain
+# boundary, not something to be smoothed over.
 VALIDITY_FLOOR_AA = 912.0
 
 
@@ -96,9 +136,9 @@ def transmission(k: np.ndarray) -> np.ndarray:
 
 def transmission_with_floor(wave: np.ndarray, k: np.ndarray) -> np.ndarray:
     """Like `transmission`, but clamped to 1.0 (no reddening applied) below
-    `VALIDITY_FLOOR_AA` -- see module docstring's "Validity floor" note.
-    This is what every real caller (torus_reddening.py,
-    host_disk_reddening.py) uses; the bare `transmission` above is kept
-    for direct testing of the unclamped functional form itself."""
+    `VALIDITY_FLOOR_AA` -- see module docstring's "Domain of application"
+    note. This is what every real caller (torus_reddening.py,
+    host_disk_reddening.py) uses; the bare `transmission` above is kept for
+    direct testing of the unclamped functional form itself."""
     wave = np.asarray(wave, dtype=float)
     return np.where(wave >= VALIDITY_FLOOR_AA, transmission(k), 1.0)

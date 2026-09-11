@@ -10,9 +10,11 @@ default prior for each catalogued NPE-parameter; `demiurge.parameters.samplers`
 is what actually calls `.draw(...)` on a caller's behalf.
 
 Every family here is deliberately minimal -- add a new one only when a real
-catalogued parameter needs it (this module currently covers every family
-actually used by the parameters ported from the pre-refactor reference
-implementation on `main`; see registry.py's citations).
+catalogued parameter needs it. Most families here cover parameters ported
+from the pre-refactor reference implementation on `main` (see registry.py's
+citations); `ZeroInflated` is a genuinely new addition (2026-09-10, the
+quasar/galaxy blending + reddening channel) for parameters with real
+probability mass at exactly zero, which no family ported from `main` needed.
 """
 from __future__ import annotations
 
@@ -226,6 +228,54 @@ class Dirichlet:
         return rng.dirichlet(self.alpha, size=size)
 
 
+@dataclass(frozen=True)
+class ZeroInflated:
+    """Point mass at exactly 0.0 with probability `p_zero`, else a draw from
+    `base`. Use only when a real catalogued parameter has genuine,
+    non-negligible probability of being EXACTLY zero (e.g. "this sightline's
+    host-disk dust is negligible") -- `LogUniform`/`LogNormal` structurally
+    exclude 0, and `Uniform(0, hi)` assigns it zero density, not positive
+    mass, so neither can represent this.
+
+    Deliberately not modeled as a separate Bernoulli-gate parameter composed
+    downstream: that split means anyone who queries the continuous `base`
+    parameter in isolation (plotting, validation, a future NPESampler's
+    density code) silently gets a nonzero value with no indication a gate
+    exists. `ZeroInflated` is the full marginal by construction, so querying
+    it alone is always correct.
+
+    This is a mixed discrete+continuous family, the first one in this
+    module -- `.support` reports the continuous part's support only (per
+    the shared `Distribution` protocol's numeric-range convention); the
+    atom at zero is a separate fact, exposed via `.point_mass`. Any future
+    consumer that treats `.support` as the complete characterization of a
+    distribution (e.g. a density-plotting routine) needs to also check
+    `.point_mass` for a family like this one.
+    """
+
+    p_zero: float
+    base: "Distribution"
+
+    def __post_init__(self) -> None:
+        if not (0.0 <= self.p_zero <= 1.0):
+            raise ValueError(f"ZeroInflated requires 0 <= p_zero <= 1, got p_zero={self.p_zero}")
+
+    @property
+    def support(self) -> tuple[float, float]:
+        lo, hi = self.base.support
+        return (min(0.0, lo), hi)
+
+    @property
+    def point_mass(self) -> float:
+        return 0.0
+
+    def draw(self, rng: np.random.Generator, size: Optional[int] = None):
+        if size is None:
+            return 0.0 if rng.uniform() < self.p_zero else self.base.draw(rng)
+        is_zero = rng.uniform(size=size) < self.p_zero
+        return np.where(is_zero, 0.0, self.base.draw(rng, size=size))
+
+
 Distribution = Union[
     Uniform,
     LogUniform,
@@ -237,4 +287,5 @@ Distribution = Union[
     Gamma,
     MaxwellBoltzmann,
     Dirichlet,
+    ZeroInflated,
 ]

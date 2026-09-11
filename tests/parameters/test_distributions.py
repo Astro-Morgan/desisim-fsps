@@ -11,6 +11,7 @@ from demiurge.parameters.distributions import (
     Normal,
     Poisson,
     Uniform,
+    ZeroInflated,
 )
 
 RNG = np.random.default_rng(0)
@@ -130,3 +131,50 @@ def test_maxwell_boltzmann_mean_matches_theory():
     draws = dist.draw(np.random.default_rng(3), size=200_000)
     expected_mean = 50.0 * 2.0 * np.sqrt(2.0 / np.pi)
     assert draws.mean() == pytest.approx(expected_mean, rel=0.02)
+
+
+def test_zero_inflated_rejects_out_of_range_p_zero():
+    with pytest.raises(ValueError):
+        ZeroInflated(1.5, LogUniform(0.1, 1.0))
+    with pytest.raises(ValueError):
+        ZeroInflated(-0.1, LogUniform(0.1, 1.0))
+
+
+def test_zero_inflated_extremes_are_deterministic():
+    base = LogUniform(0.1, 1.0)
+    assert ZeroInflated(1.0, base).draw(RNG) == 0.0
+    for _ in range(200):
+        x = ZeroInflated(0.0, base).draw(RNG)
+        assert 0.1 <= x <= 1.0
+
+
+def test_zero_inflated_scalar_draw_matches_p_zero_rate():
+    dist = ZeroInflated(0.3, LogUniform(0.1, 1.0))
+    draws = np.array([dist.draw(np.random.default_rng(i)) for i in range(20_000)])
+    zero_fraction = np.mean(draws == 0.0)
+    assert zero_fraction == pytest.approx(0.3, abs=0.02)
+    nonzero = draws[draws != 0.0]
+    assert np.all((nonzero >= 0.1) & (nonzero <= 1.0))
+
+
+def test_zero_inflated_vectorized_draw_matches_p_zero_rate():
+    dist = ZeroInflated(0.4, Uniform(2.0, 5.0))
+    draws = dist.draw(np.random.default_rng(7), size=50_000)
+    assert draws.shape == (50_000,)
+    zero_fraction = np.mean(draws == 0.0)
+    assert zero_fraction == pytest.approx(0.4, abs=0.01)
+    nonzero = draws[draws != 0.0]
+    assert np.all((nonzero >= 2.0) & (nonzero <= 5.0))
+
+
+def test_zero_inflated_support_and_point_mass():
+    dist = ZeroInflated(0.2, LogUniform(0.1, 10.0))
+    assert dist.support == (0.0, 10.0)
+    assert dist.point_mass == 0.0
+
+
+def test_zero_inflated_reproducible_given_same_generator_state():
+    dist = ZeroInflated(0.5, Uniform(0.0, 1.0))
+    a = dist.draw(np.random.default_rng(11), size=500)
+    b = dist.draw(np.random.default_rng(11), size=500)
+    np.testing.assert_array_equal(a, b)

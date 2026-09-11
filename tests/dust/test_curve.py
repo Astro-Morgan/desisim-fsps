@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from demiurge.dust.curve import LAMBDA_V, drude, k_lambda, transmission
+from demiurge.dust.curve import LAMBDA_V, VALIDITY_FLOOR_AA, drude, k_lambda, transmission, transmission_with_floor
 
 WAVE = np.linspace(1000.0, 10000.0, 500)
 
@@ -60,3 +60,32 @@ def test_bump_adds_local_excess_at_bump_center():
     k_with_bump = k_lambda(np.array([2175.0]), theta0=0.3, theta1=0.5, theta2=0.5, theta3=0.0)
     assert k_with_bump[0] > k_no_bump[0]
     assert k_with_bump[0] == pytest.approx(k_no_bump[0] + 0.5)
+
+
+def test_transmission_with_floor_is_unclamped_above_the_floor():
+    wave = np.array([VALIDITY_FLOOR_AA, 5500.0, 10000.0])
+    k = k_lambda(wave, theta0=1.0, theta1=1.0, theta2=0.0, theta3=0.0)
+    np.testing.assert_array_equal(transmission_with_floor(wave, k), transmission(k))
+
+
+def test_transmission_with_floor_is_exactly_one_below_the_floor():
+    # A steep, real-registered-range theta1 that would otherwise blow up
+    # k(lambda) catastrophically when naively extrapolated into the EUV/
+    # X-ray (this reproduces the exact failure mode found via visual
+    # verification of the blended quasar continuum, 2026-09-11: k~330,
+    # T~1e-133 at 100A, before this floor existed).
+    wave = np.array([0.06, 1.0, 100.0, 500.0, 911.9])
+    k = k_lambda(wave, theta0=0.166, theta1=1.897, theta2=0.0, theta3=0.0)
+    t = transmission_with_floor(wave, k)
+    np.testing.assert_array_equal(t, np.ones_like(wave))
+
+
+def test_transmission_with_floor_transitions_at_the_floor():
+    just_below = transmission_with_floor(
+        np.array([VALIDITY_FLOOR_AA - 0.1]), k_lambda(np.array([VALIDITY_FLOOR_AA - 0.1]), 1.0, 1.0)
+    )
+    just_above = transmission_with_floor(
+        np.array([VALIDITY_FLOOR_AA + 0.1]), k_lambda(np.array([VALIDITY_FLOOR_AA + 0.1]), 1.0, 1.0)
+    )
+    assert just_below[0] == 1.0
+    assert just_above[0] < 1.0

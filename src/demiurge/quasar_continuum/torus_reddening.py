@@ -32,6 +32,13 @@ slightly steeper -- consistent with `host_disk_reddening.py` capturing
 exactly that additional, distinct, steeper component separately). `theta2`
 (UV bump) and `theta3` (grey floor) are fixed at 0.0 here (not drawn) per
 that same bump-free finding -- see `registry.py`'s rationale.
+
+`transmission()` uses `dust.curve.transmission_with_floor`, NOT the bare
+`transmission` -- this curve is not applied below ~912A (see that module's
+"Validity floor" note): quasar_continuum's native grid reaches into the
+EUV/X-ray, far outside where any UV/optical dust curve means anything, and
+naively extrapolating the power-law term there crushes the transmission to
+numerical noise that has nothing to do with real physics.
 """
 from __future__ import annotations
 
@@ -40,7 +47,7 @@ from typing import Optional
 
 import numpy as np
 
-from ..dust.curve import k_lambda, transmission
+from ..dust.curve import k_lambda, transmission_with_floor
 from ..parameters.samplers import ParameterSampler, PriorSampler
 
 _COVERING_ANGLE_COSINE = "quasar_continuum.torus_reddening.covering_angle_cosine"
@@ -68,7 +75,7 @@ class TorusReddeningResult:
         if not self.intercepted:
             return np.ones_like(wave)
         k = k_lambda(wave, self.theta0_amplitude, self.theta1_slope, theta2=0.0, theta3=0.0)
-        return transmission(k)
+        return transmission_with_floor(wave, k)
 
 
 def draw_torus_reddening(

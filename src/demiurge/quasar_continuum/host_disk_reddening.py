@@ -38,6 +38,16 @@ module's other new parameter) uses `ZeroInflated` rather than a plain
 still shows a nonzero (minimum) reddening under the path-length law below --
 exact zero only ever comes from a dust-free `av_faceon` draw, not from
 inclination alone.
+
+`transmission()` uses `dust.curve.transmission_with_floor`, NOT the bare
+`transmission` -- this curve is not applied below ~912A (see that module's
+"Validity floor" note): quasar_continuum's native grid reaches into the
+EUV/X-ray, far outside where any UV/optical dust curve means anything, and
+naively extrapolating the power-law term there crushes the transmission to
+numerical noise that has nothing to do with real physics (found via visual
+verification of the blended composite, 2026-09-11 -- a real theta1_slope
+draw near the top of this module's registered range produced transmission
+~1e-133 at 100A).
 """
 from __future__ import annotations
 
@@ -46,7 +56,7 @@ from typing import Optional
 
 import numpy as np
 
-from ..dust.curve import k_lambda, transmission
+from ..dust.curve import k_lambda, transmission_with_floor
 from ..parameters.samplers import ParameterSampler, PriorSampler
 
 _COSI_DISK = "quasar_continuum.host_disk_reddening.cosi_disk"
@@ -91,7 +101,7 @@ class HostDiskReddeningResult:
         if self.av_faceon == 0.0:
             return np.ones_like(wave)
         k = k_lambda(wave, self.av, self.theta1_slope, theta2=0.0, theta3=0.0)
-        return transmission(k)
+        return transmission_with_floor(wave, k)
 
 
 def draw_host_disk_reddening(

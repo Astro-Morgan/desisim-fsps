@@ -321,7 +321,19 @@ power-law family
 \end{equation}
 ($\lambda_V = 5500\,\mathrm{\AA}$; $\theta_2$, the UV-bump amplitude, and
 $\theta_3$, a grey floor, both fixed at zero -- not drawn), with
-transmission $T(\lambda) = 10^{-0.4 k(\lambda)}$.
+transmission $T(\lambda) = 10^{-0.4 k(\lambda)}$ applied only at
+$\lambda \geq 912\,\mathrm{\AA}$ (the Lyman limit; transmission is fixed to
+1 -- no reddening -- below it). This curve is a UV/optical extinction law,
+not calibrated against any real measurement into the EUV/X-ray;
+\texttt{quasar\_continuum}'s own native grid extends to $\sim$0.06\,\AA{},
+and naively extrapolating the power-law term that far blueward diverges
+(found via visual verification of the blended composite, 2026-09-11: a
+real registered $\theta_1$ draw produced $k\sim330$, $T\sim10^{-133}$ at
+100\,\AA{} before this floor existed) -- crushing the transmission to
+numerical noise with nothing to do with real physics, since X-ray
+absorption is a physically separate, deliberately not-yet-built mechanism
+(photoelectric/Compton opacity, not dust extinction). The same floor
+applies to host-disk-local reddening below.
 \citet{GaskellEtAl2004} find AGN nuclear reddening curves significantly
 flatter in the UV than the local ISM/SMC, with no 2175\,\AA\ bump, and
 specifically "very flat" for their least host-contaminated (radio-loud)

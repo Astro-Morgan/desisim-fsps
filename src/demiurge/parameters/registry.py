@@ -55,7 +55,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .distributions import Dirichlet, Distribution, LogNormal, LogUniform, Normal, Uniform
+from .distributions import Dirichlet, Distribution, LogNormal, LogUniform, Normal, Uniform, ZeroInflated
 
 
 @dataclass(frozen=True)
@@ -339,6 +339,55 @@ _add(
 # curves show no 2175A bump; a grey floor isn't needed to capture the
 # flat/SMC-like family's reach with just an amplitude+slope. See
 # torus_reddening.py.
+
+# =============================================================================
+# quasar_continuum.host_disk_reddening -- the host galaxy's OWN disk
+# material along the specific nuclear sightline to the AGN (distinct from
+# quasar_continuum.torus_reddening's compact nuclear-scale screen, and from
+# any future galaxy-global diffuse ISM reddening). See
+# host_disk_reddening.py's module docstring for the geometry.
+# =============================================================================
+_add(
+    NPEParameter(
+        name="quasar_continuum.host_disk_reddening.cosi_disk",
+        owner="quasar_continuum.host_disk_reddening",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.0, 1.0),
+        units="unitless (cosine of the host-galaxy-disk inclination to our line of sight)",
+        citation="Hopkins, Hernquist, Hayward & Narayanan (2012, MNRAS 425, 1121) -- the AGN/torus symmetry axis is not correlated with the host galaxy's own large-scale disk axis (independent angular-momentum transport at very different physical scales); standard isotropic-orientation argument for the Uniform-in-cosine shape itself.",
+        description="Host-galaxy-disk inclination -- deliberately independent of quasar_continuum.agnsed.cosi (real AGN host disks are not assumed coplanar with the AGN disk/torus).",
+        rationale="Drawn fully independently of agnsed.cosi per Hopkins et al.'s finding: if the two axes are randomly oriented relative to EACH OTHER, then drawing both isotropically relative to our fixed sightline is not a simplifying shortcut, it is what the actual 3D geometry gives once relative alignment is accounted for.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.host_disk_reddening.av_faceon",
+        owner="quasar_continuum.host_disk_reddening",
+        tier=3,
+        physical=True,
+        distribution=ZeroInflated(p_zero=0.3, base=LogUniform(0.05, 2.0)),
+        units="mag-scale amplitude (dust.curve.k_lambda's theta0 at face-on, i.e. before the inclination path-length scaling in host_disk_reddening.py)",
+        description="Face-on-equivalent host-disk reddening amplitude; the actual applied amplitude is this value scaled by a path-length factor depending on cosi_disk (host_disk_reddening.py).",
+        rationale="ZeroInflated chosen specifically because a real, non-negligible fraction of hosts (e.g. gas-poor early-type disks) are genuinely dust-free, independent of viewing geometry -- LogUniform/LogNormal structurally cannot represent that. p_zero and the LogUniform bracket are both MAGIC (no dedicated per-quantity literature check performed yet) pending a real calibration pass.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.host_disk_reddening.theta1_slope",
+        owner="quasar_continuum.host_disk_reddening",
+        tier=3,
+        physical=True,
+        distribution=Uniform(0.0, 2.0),
+        units="unitless (dust.curve.k_lambda's theta1, power-law slope)",
+        description="Power-law steepness of the host-disk-local reddening curve -- ordinary host-galaxy ISM dust, not AGN-processed nuclear dust, so not restricted to torus_reddening's narrower flat/SMC-like range.",
+        rationale="MAGIC -- reuses main's own general-reach theta1 bracket (Calzetti-like through steep SMC-like) since this is ordinary ISM dust, not yet independently re-derived for this specific host-disk-local context.",
+    ),
+)
+# theta2 (UV bump) and theta3 (grey floor) are fixed at 0.0 here for this
+# first pass too -- UNLIKE torus_reddening, this is NOT because of a
+# bump-free physical finding (ordinary host ISM dust genuinely can show a
+# real 2175A bump, main:py/desisim/dust.py's own vary_bump_shape extension
+# exists for exactly this reason) -- it is a deliberate scope-narrowing
+# choice for this first pass, honestly flagged rather than silently
+# resolved: revisit if a specific host-disk channel need arises. See
+# host_disk_reddening.py.
 
 # =============================================================================
 # Real channel parameters get added here, one channel at a time, alongside

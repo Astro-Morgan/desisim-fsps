@@ -337,6 +337,49 @@ and is drawn from a MAGIC $\mathrm{Uniform}(0.1, 3.0)$ bracket pending one.
 Full parameter list in \texttt{src/demiurge/parameters/registry.py}
 (\texttt{quasar\_continuum.torus\_reddening.*}).
 
+\subsection{Host-disk-local reddening}
+\label{sec:host-disk-reddening}
+
+A physically distinct screen from Section~\ref{sec:torus-reddening}'s
+compact nuclear torus: the host galaxy's own disk material along the
+specific nuclear sightline to the AGN. \texttt{quasar\_continuum.host\_disk\_reddening}
+draws its own inclination, $\cos i_{\rm disk} \sim \mathrm{Uniform}(0, 1)$,
+completely independently of the torus's $\cos i$ --
+\citet{HopkinsEtAl2012} find the AGN/torus symmetry axis is not correlated
+with the host galaxy's own large-scale disk axis (independent
+angular-momentum transport at very different physical scales), so
+independent isotropic draws for both is not a simplifying shortcut, it is
+what the actual 3D geometry gives once random relative alignment between
+the two axes is accounted for.
+
+Unlike the torus's hard geometric threshold, this is a smooth path-length
+effect: a foreground dust layer the sightline crosses exiting the host
+disk, with the face-on amplitude $A_{V,\rm faceon}$ scaled by a capped
+secant path-length factor, $\min(1/\cos i_{\rm disk},\,5)$ -- the standard
+geometric shape real disk radiative-transfer attenuation models (e.g.
+\citealt{TuffsEtAl2004}) qualitatively saturate toward rather than
+literally diverge at $i \to 90^\circ$ (not fit to their tables here, only
+their qualitative shape, via the hard cap). $A_{V,\rm faceon}$ itself is
+drawn from a \texttt{ZeroInflated} prior ($p_{\rm zero}=0.3$, base
+$\mathrm{LogUniform}(0.05, 2.0)$, both MAGIC): a continuously-drawn $\cos
+i_{\rm disk}$ has probability exactly zero of landing at perfect face-on,
+so a purely smooth function of inclination alone cannot represent "this
+host is genuinely dust-free" -- a real, independent-of-inclination
+population fact this project's other continuous families (LogUniform,
+LogNormal) structurally exclude. The reddening curve reuses
+$k(\lambda) = \theta_0 (\lambda/\lambda_V)^{-\theta_1}$ from
+Section~\ref{sec:torus-reddening} with $\theta_0 = A_{V,\rm faceon} \times$
+the path-length factor, but a wider $\theta_1 \sim \mathrm{Uniform}(0, 2)$
+slope range than the torus's -- this is ordinary host-galaxy ISM dust, not
+AGN-processed nuclear dust, so it is not restricted to the torus's
+narrower flat/SMC-like family. $\theta_2$ (UV bump) and $\theta_3$ (grey
+floor) are fixed at zero for this first pass, but -- unlike the torus case
+-- this is a deliberate scope-narrowing choice, not a bump-free physical
+finding (ordinary ISM dust genuinely can show a real 2175\,\AA\ bump);
+revisit if a specific need arises. Full parameter list in
+\texttt{src/demiurge/parameters/registry.py}
+(\texttt{quasar\_continuum.host\_disk\_reddening.*}).
+
 \section{Discussion}
 TBD.
 

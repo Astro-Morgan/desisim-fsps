@@ -291,10 +291,51 @@ generated. (An earlier version of this prior restricted $\cos i \in [0.5,
 1]$ as a workaround for not yet having any torus-obscuration model; that
 restriction was lifted once \texttt{quasar\_continuum.torus\_reddening}
 began modeling obscuration explicitly as a deterministic consequence of
-this same draw -- see the forthcoming reddening/blending section.) The full
-parameter list, tiers, and citations are catalogued in
-\texttt{src/demiurge/parameters/registry.py}
+this same draw -- see below.) The full parameter list, tiers, and citations
+are catalogued in \texttt{src/demiurge/parameters/registry.py}
 (\texttt{quasar\_continuum.agnsed.*}).
+
+\subsection{Torus-local reddening}
+\label{sec:torus-reddening}
+
+Obscuration is not an independent free draw -- it is a deterministic
+consequence of the same $\cos i$ value already drawn for the disc/warm
+Lambertian projection above. \texttt{quasar\_continuum.torus\_reddening}
+draws a covering-angle cosine $\cos\theta_{\rm oc}$ (representing the
+torus's half-opening angle, measured from the pole) independently of
+$\cos i$; the sightline intercepts the torus, and torus-local reddening
+applies, iff $\cos i < \cos\theta_{\rm oc}$. This mirrors how the disc/warm
+Lambertian factor itself is already computed inside the physics module
+rather than via any sampler-level correlation -- \texttt{PriorSampler} only
+supports independent draws, and this gate is ordinary physics-module logic
+operating on two already-independently-drawn values, not a departure from
+that constraint. $\cos\theta_{\rm oc}$ is drawn from
+$\mathrm{Uniform}(0.13, 0.47)$, approximating the population scatter
+\citet{EzhikodeEtAl2017} measure directly (mean covering factor
+$f_c = 0.30 \pm 0.17$ across 51 local type-1 AGN).
+
+The reddening curve itself, when intercepted, is the flat, bump-free
+power-law family
+\begin{equation}
+    k(\lambda) = \theta_0 (\lambda/\lambda_V)^{-\theta_1}
+\end{equation}
+($\lambda_V = 5500\,\mathrm{\AA}$; $\theta_2$, the UV-bump amplitude, and
+$\theta_3$, a grey floor, both fixed at zero -- not drawn), with
+transmission $T(\lambda) = 10^{-0.4 k(\lambda)}$.
+\citet{GaskellEtAl2004} find AGN nuclear reddening curves significantly
+flatter in the UV than the local ISM/SMC, with no 2175\,\AA\ bump, and
+specifically "very flat" for their least host-contaminated (radio-loud)
+sample -- motivating both the bump-free simplification and the narrow
+$\theta_1 \sim \mathrm{Uniform}(0, 0.8)$ slope prior (well below the
+general-reach $[0,2]$ range a non-AGN-specific curve family would use).
+Their own finding that host-contaminated (radio-quiet) curves are somewhat
+steeper is consistent with -- and motivates keeping distinct from --
+host-disk-local reddening (a separate, not-yet-built channel), rather than
+folding both effects into one shared draw. $\theta_0$ (the amplitude when
+intercepted) has no dedicated covering-factor-to-reddening calibration yet
+and is drawn from a MAGIC $\mathrm{Uniform}(0.1, 3.0)$ bracket pending one.
+Full parameter list in \texttt{src/demiurge/parameters/registry.py}
+(\texttt{quasar\_continuum.torus\_reddening.*}).
 
 \section{Discussion}
 TBD.

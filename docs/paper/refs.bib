@@ -351,3 +351,28 @@
     pages = {A58},
     note = {DESI-targeted SBI spectral-inversion model using a Dense-Basis-based SFH parameterization; its Dirichlet(alpha=1) prior on per-bin sSFR fractions is the (not-identical, only inspirational) basis for this project's own quantile-gap Dirichlet prior default.},
 }
+
+% =============================================================================
+% demiurge.parameters.registry -- quasar_continuum.torus_reddening
+% =============================================================================
+@ARTICLE{EzhikodeEtAl2017,
+    author = {{Ezhikode}, Shubham Harit and {Gandhi}, Poshak and {Done}, Chris and {Ward}, Martin and {Dewangan}, Gulab~Chand and {Misra}, Ranjeev and {Philip}, N.~S.},
+    title = "{Determining the torus covering factors for a sample of type 1 AGN in the local Universe}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2017,
+    volume = {472},
+    pages = {3492-3511},
+    doi = {10.1093/mnras/stx2160},
+    note = {Mean torus covering factor f_c = 0.30 +/- 0.17 across 51 local type-1 AGN (IR/bolometric method) -- anchors quasar_continuum.torus_reddening.covering_angle_cosine's prior range.},
+}
+
+@ARTICLE{GaskellEtAl2004,
+    author = {{Gaskell}, C.~Martin and {Goosmann}, Ren{\'e}~W. and {Antonucci}, Robert~R.~J. and {Whysong}, David~H.},
+    title = "{The Nuclear Reddening Curve for Active Galactic Nuclei and the Shape of the Infrared to X-Ray Spectral Energy Distribution}",
+    journal = {The Astrophysical Journal},
+    year = 2004,
+    volume = {616},
+    pages = {147-156},
+    doi = {10.1086/423885},
+    note = {AGN nuclear reddening curves are significantly flatter in the UV than the local ISM/SMC, with no 2175A bump, and "very flat" for the least host-contaminated (radio-loud) sample -- motivates torus_reddening's bump-free, narrow-slope curve family and the separation from a distinct, steeper host-disk-local component.},
+}

@@ -293,6 +293,54 @@ _add(
 )
 
 # =============================================================================
+# quasar_continuum.torus_reddening -- the compact, nuclear-scale AGN dust
+# screen from the classical unification-model torus (distinct from
+# quasar_continuum.host_disk_reddening's host-galaxy-scale screen, and from
+# any future galaxy-global diffuse ISM reddening -- three physically
+# different screens). See torus_reddening.py's module docstring for the
+# deterministic cosi-vs-covering_angle_cosine interception mechanism.
+# =============================================================================
+_add(
+    NPEParameter(
+        name="quasar_continuum.torus_reddening.covering_angle_cosine",
+        owner="quasar_continuum.torus_reddening",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.13, 0.47),
+        units="unitless (cosine of the torus half-opening angle, measured from the pole)",
+        citation="Ezhikode et al. (2017, MNRAS 472, 3492) -- mean torus covering factor f_c = 0.30 +/- 0.17 across 51 local type-1 AGN (IR/bolometric method).",
+        description="quasar_continuum.agnsed.cosi intercepts the torus (torus reddening applies) iff cosi < this value; not intercepted otherwise (torus_reddening.py).",
+        rationale="Uniform(mean-1sigma, mean+1sigma) from Ezhikode et al.'s own measured population scatter -- an approximation to their reported distribution shape using an existing family rather than adding a new bounded-shape distribution (e.g. Beta) for this one parameter alone.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.torus_reddening.theta0_amplitude",
+        owner="quasar_continuum.torus_reddening",
+        tier=3,
+        physical=True,
+        distribution=Uniform(0.1, 3.0),
+        units="mag-scale amplitude (dust.curve.k_lambda's theta0, at lambda_v=5500A)",
+        description="Torus-local reddening magnitude when the sightline intercepts the torus (see covering_angle_cosine above); irrelevant, unused, when it does not.",
+        rationale="MAGIC -- matches main's own precedent order-of-magnitude bracket (negligible to heavily obscured) for this kind of amplitude; no dedicated covering-factor-to-E(B-V) calibration exists yet to derive a tighter, citable range.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.torus_reddening.theta1_slope",
+        owner="quasar_continuum.torus_reddening",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.0, 0.8),
+        units="unitless (dust.curve.k_lambda's theta1, power-law slope)",
+        citation="Gaskell, Goosmann, Antonucci & Whysong (2004, ApJ 616, 147) -- AGN nuclear reddening curves are significantly flatter in the UV than the local ISM/SMC; radio-loud (least host-contaminated) AGN curves specifically 'very flat'.",
+        description="Power-law steepness of the torus-local reddening curve.",
+        rationale="Upper bound well below main's general-reach theta1 range (0.0-2.0, SMC-like at the top) to reflect Gaskell et al.'s specific finding that nuclear (torus-scale) curves are flatter than SMC, not merely bounded by it -- host-galaxy-scale reddening (steeper, per their own radio-quiet-vs-radio-loud comparison) is handled separately by quasar_continuum.host_disk_reddening, consistent with that finding.",
+    ),
+)
+# theta2 (UV bump) and theta3 (grey floor) are fixed at 0.0 here (not
+# registered/drawn) -- Gaskell et al. (2004) find AGN nuclear reddening
+# curves show no 2175A bump; a grey floor isn't needed to capture the
+# flat/SMC-like family's reach with just an amplitude+slope. See
+# torus_reddening.py.
+
+# =============================================================================
 # Real channel parameters get added here, one channel at a time, alongside
 # that channel's actual module -- see the module docstring above.
 # =============================================================================

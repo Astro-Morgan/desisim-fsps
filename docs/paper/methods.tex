@@ -281,10 +281,17 @@ via the same forward-accumulation-until-threshold procedure QSOSED itself
 uses internally (walk outward from the ISCO, accumulate the disc-luminosity
 integral, and freeze $R_{\rm hot}$ the moment the running total first
 reaches the target), generalized from QSOSED's own hardcoded single target
-to any drawn value. The inclination prior ($\cos i \in [0.5, 1]$) is
-motivated by the standard AGN unification argument
-\citep{UrryPadovani1995} that type-1 (unobscured, broad-line) selection
-restricts real quasars to within the torus opening half-angle. The full
+to any drawn value. The inclination prior ($\cos i \in [0, 1]$, the full
+isotropic range) follows the standard AGN unification argument
+\citep{Antonucci1993, Netzer2015} that the torus/disc symmetry axis is
+isotropically oriented across the general AGN population, with type-1 vs.
+type-2 classification an emergent consequence of whether a given sightline
+happens to intercept the torus -- not a precondition on which systems get
+generated. (An earlier version of this prior restricted $\cos i \in [0.5,
+1]$ as a workaround for not yet having any torus-obscuration model; that
+restriction was lifted once \texttt{quasar\_continuum.torus\_reddening}
+began modeling obscuration explicitly as a deterministic consequence of
+this same draw -- see the forthcoming reddening/blending section.) The full
 parameter list, tiers, and citations are catalogued in
 \texttt{src/demiurge/parameters/registry.py}
 (\texttt{quasar\_continuum.agnsed.*}).

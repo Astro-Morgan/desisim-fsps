@@ -65,6 +65,28 @@ Windows, see BUILD.md) is only required for `from_single_population`,
 `backend="fsps_direct"`, or building/rebuilding the pretabulated grid
 (`scripts/build_galaxy_continuum_ssp_grid.py`) -- `backend="pretabulated"`
 needs neither at runtime.
+
+`n_mc_samples` (fsps_direct only, default 1 = today's exact single-draw
+behavior): FSPS's isochrone response near certain evolutionary transitions
+(e.g. ~60-71 Myr at Z~0.006) can jump by orders of magnitude in the EUV/
+He+-ionizing tail, because that flux is dominated by a vanishingly small
+number of extremely short-lived hot post-main-sequence stars -- see
+`scripts/build_galaxy_continuum_ssp_grid.py`'s module docstring for the
+full physical explanation (found while diagnosing the same effect baked
+into the pretabulated grid). That jump is real physics, not a bug -- a
+narrow recent-burst mock genuinely can show this stochastic variance, and
+`fsps_direct`'s default (`n_mc_samples=1`) deliberately keeps that single
+real draw rather than hiding it. Passing `n_mc_samples > 1` instead
+averages each SFH bin's spectrum over that many trials, each with the
+bin's tabulated time support shifted by a small random draw (jittered in
+log-age space around the bin's own SFR-weighted mean age, same window as
+the pretabulated grid's own per-age averaging) -- the tabulated-SFH
+analogue of that fix, for callers who want the smooth population
+*expectation* instead of one stochastic realization (e.g. to compare
+fairly against the now-smoothed pretabulated grid). Only applies to the
+per-bin tabulated-SFH path (`_synthesize_fsps_direct`) -- never
+`from_single_population`, whose whole purpose is exact, unsmoothed
+recovery of a raw `fsps.StellarPopulation` call.
 """
 from __future__ import annotations
 
@@ -97,12 +119,65 @@ def _require_fsps():
 
 _C_ANGSTROM_PER_S = 2.99792458e18
 
+# Half-width (dex, log10 yr) of the age-jitter window for fsps_direct's optional
+# `n_mc_samples` averaging -- intentionally the same window used by
+# scripts/build_galaxy_continuum_ssp_grid.py's per-age grid averaging (both target
+# the same underlying several-Myr-scale isochrone transition), kept as an
+# independent constant here (not imported from the grid) so fsps_direct stays
+# genuinely independent of the shipped grid's own approximations.
+_MC_JITTER_HALF_WIDTH_DEX = 0.025
+
 
 def _fnu_to_flambda(wave_angstrom: np.ndarray, flux_fnu: np.ndarray) -> np.ndarray:
     """f_lambda = f_nu * c / lambda**2 -- standard conversion, used to honor
     `peraa=True` for the pretabulated backend (its grid is stored in f_nu,
     matching FSPS's own `peraa=False` convention)."""
     return flux_fnu * _C_ANGSTROM_PER_S / wave_angstrom**2
+
+
+def _mc_average_segment_spectrum(
+    sp, t_grid_gyr: np.ndarray, segment_sfr: np.ndarray, t_obs_gyr: float, n_samples: int,
+    rng: np.random.Generator, peraa: bool,
+):
+    """Average `n_samples` FSPS spectra for one tabulated-SFH segment, each
+    computed with the segment's whole time support shifted by a small random
+    Delta-t so its SFR-weighted mean age lands at a jittered target (drawn in
+    log-age space around that mean age) instead of its exact original value
+    -- `t_obs_gyr` stays fixed throughout so every trial is still one
+    consistent observation instant. See this module's docstring for why."""
+    mask = segment_sfr > 0.0
+    seg_times = t_grid_gyr[mask]
+    mean_formation_t_gyr = float(np.average(seg_times, weights=segment_sfr[mask]))
+    age_center_gyr = t_obs_gyr - mean_formation_t_gyr
+    logyr_center = np.log10(max(age_center_gyr, 1.0e-12) * 1.0e9)
+
+    jittered_logyr = rng.uniform(
+        logyr_center - _MC_JITTER_HALF_WIDTH_DEX, logyr_center + _MC_JITTER_HALF_WIDTH_DEX, size=n_samples
+    )
+    seg_t_min, seg_t_max = float(seg_times.min()), float(seg_times.max())
+
+    wave = None
+    summed = None
+    for logyr_sample in jittered_logyr:
+        jittered_age_gyr = 10.0**logyr_sample / 1.0e9
+        delta_t_gyr = age_center_gyr - jittered_age_gyr
+        # Clip the scalar shift itself (not the shifted array pointwise) so
+        # the whole array stays strictly increasing -- FSPS requires this --
+        # bounded by the segment's OWN formation-time range so its stars
+        # never form before t=0 or after t_obs (elementwise clipping would
+        # collapse multiple points to the same boundary value and break
+        # strict monotonicity; the whole array's own endpoints can't be used
+        # for this bound since t_obs_gyr == t_grid_gyr[-1] by construction,
+        # which would forbid any "younger" jitter direction entirely).
+        delta_t_gyr = float(np.clip(delta_t_gyr, -seg_t_min, t_obs_gyr - seg_t_max))
+        shifted_t_grid = t_grid_gyr + delta_t_gyr
+        sp.set_tabular_sfh(shifted_t_grid, segment_sfr)
+        w, f = sp.get_spectrum(tage=t_obs_gyr, peraa=peraa)
+        if wave is None:
+            wave = w
+            summed = np.zeros_like(f)
+        summed = summed + f
+    return wave, summed / n_samples
 
 
 @dataclass(frozen=True)
@@ -154,7 +229,13 @@ class GalaxyContinuum:
         n_bins: int = 8,
         z_monotonic_enforce: bool = False,
         peraa: bool = False,
+        n_mc_samples: int = 1,
+        mc_rng: Optional[np.random.Generator] = None,
     ) -> "GalaxyContinuum":
+        """`n_mc_samples`/`mc_rng`: see this module's docstring -- only
+        meaningful for `backend="fsps_direct"`; ignored (never applied) if
+        the history degenerates to the exact `from_single_population` path
+        below, since that path is always exact by design."""
         t_grid_gyr = np.atleast_1d(np.asarray(t_grid_gyr, dtype=float))
         sfr_msun_per_yr = np.atleast_1d(np.asarray(sfr_msun_per_yr, dtype=float))
         z_grid = np.atleast_1d(np.asarray(z_grid, dtype=float))
@@ -173,7 +254,15 @@ class GalaxyContinuum:
 
         z_grid = metallicity_module.validate_monotonic_z(z_grid, enforce=z_monotonic_enforce)
         return cls._synthesize(
-            t_grid_gyr, sfr_msun_per_yr, z_grid, imf_mode=imf_mode, backend=backend, n_bins=n_bins, peraa=peraa
+            t_grid_gyr,
+            sfr_msun_per_yr,
+            z_grid,
+            imf_mode=imf_mode,
+            backend=backend,
+            n_bins=n_bins,
+            peraa=peraa,
+            n_mc_samples=n_mc_samples,
+            mc_rng=mc_rng,
         )
 
     @classmethod
@@ -188,7 +277,11 @@ class GalaxyContinuum:
         n_bins: int = 8,
         n_grid: int = 200,
         peraa: bool = False,
+        n_mc_samples: int = 1,
     ) -> "GalaxyContinuum":
+        """`n_mc_samples`: see this module's docstring -- only meaningful for
+        `backend="fsps_direct"`. Reuses `rng` (the same generator driving the
+        SFH/Z draws) for the MC jitter too, rather than a separate parameter."""
         if sampler is None:
             sampler = PriorSampler()
 
@@ -203,6 +296,8 @@ class GalaxyContinuum:
             backend=backend,
             n_bins=n_bins,
             peraa=peraa,
+            n_mc_samples=n_mc_samples,
+            mc_rng=rng,
         )
         result.meta["sfh"] = sfh_result
         result.meta["metallicity"] = z_result
@@ -268,13 +363,27 @@ class GalaxyContinuum:
         ]
 
     @classmethod
-    def _synthesize(cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, backend, n_bins, peraa) -> "GalaxyContinuum":
+    def _synthesize(
+        cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, backend, n_bins, peraa, n_mc_samples=1, mc_rng=None
+    ) -> "GalaxyContinuum":
         if backend not in ("pretabulated", "fsps_direct"):
             raise ValueError(f"backend must be 'pretabulated' or 'fsps_direct', got {backend!r}")
         if backend == "pretabulated":
+            if n_mc_samples != 1:
+                raise ValueError(
+                    "n_mc_samples is only meaningful for backend='fsps_direct' -- the pretabulated grid "
+                    "already bakes in its own per-age Monte Carlo averaging at build time."
+                )
             return cls._synthesize_pretabulated(t_grid_gyr, sfr_msun_per_yr, z_grid, imf_mode=imf_mode, peraa=peraa)
         return cls._synthesize_fsps_direct(
-            t_grid_gyr, sfr_msun_per_yr, z_grid, imf_mode=imf_mode, n_bins=n_bins, peraa=peraa
+            t_grid_gyr,
+            sfr_msun_per_yr,
+            z_grid,
+            imf_mode=imf_mode,
+            n_bins=n_bins,
+            peraa=peraa,
+            n_mc_samples=n_mc_samples,
+            mc_rng=mc_rng,
         )
 
     @classmethod
@@ -296,7 +405,14 @@ class GalaxyContinuum:
         )
 
     @classmethod
-    def _synthesize_fsps_direct(cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, n_bins, peraa) -> "GalaxyContinuum":
+    def _synthesize_fsps_direct(
+        cls, t_grid_gyr, sfr_msun_per_yr, z_grid, *, imf_mode, n_bins, peraa, n_mc_samples=1, mc_rng=None
+    ) -> "GalaxyContinuum":
+        if n_mc_samples < 1:
+            raise ValueError(f"n_mc_samples must be >= 1, got {n_mc_samples}")
+        if n_mc_samples > 1 and mc_rng is None:
+            mc_rng = np.random.default_rng()
+
         fsps = _require_fsps()
         sp = fsps.StellarPopulation(zcontinuous=1, sfh=3, imf_type=2, dust1=0.0, dust2=0.0)
         t_obs = float(t_grid_gyr[-1])
@@ -316,8 +432,12 @@ class GalaxyContinuum:
             sp.params["imf1"] = imf_slopes.imf1
             sp.params["imf2"] = imf_slopes.imf2
             sp.params["imf3"] = imf_slopes.imf3
-            sp.set_tabular_sfh(t_grid_gyr, segment_sfr)
-            w, f = sp.get_spectrum(tage=t_obs, peraa=peraa)
+
+            if n_mc_samples <= 1:
+                sp.set_tabular_sfh(t_grid_gyr, segment_sfr)
+                w, f = sp.get_spectrum(tage=t_obs, peraa=peraa)
+            else:
+                w, f = _mc_average_segment_spectrum(sp, t_grid_gyr, segment_sfr, t_obs, n_mc_samples, mc_rng, peraa)
 
             if wave is None:
                 wave = w
@@ -328,7 +448,9 @@ class GalaxyContinuum:
         return cls(
             wave=wave,
             flux=total_flux,
-            meta=dict(imf_mode=imf_mode, backend="fsps_direct", n_bins=n_bins, bins=bin_meta),
+            meta=dict(
+                imf_mode=imf_mode, backend="fsps_direct", n_bins=n_bins, n_mc_samples=n_mc_samples, bins=bin_meta
+            ),
         )
 
 

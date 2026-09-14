@@ -333,6 +333,16 @@ _add(
         description="Power-law steepness of the torus-local reddening curve.",
         rationale="Upper bound well below main's general-reach theta1 range (0.0-2.0, SMC-like at the top) to reflect Gaskell et al.'s specific finding that nuclear (torus-scale) curves are flatter than SMC, not merely bounded by it -- host-galaxy-scale reddening (steeper, per their own radio-quiet-vs-radio-loud comparison) is handled separately by quasar_continuum.host_disk_reddening, consistent with that finding.",
     ),
+    NPEParameter(
+        name="quasar_continuum.torus_reddening.euv_curvature",
+        owner="quasar_continuum.torus_reddening",
+        tier=3,
+        physical=True,
+        distribution=Uniform(-2.0, 0.1),
+        units="unitless (curvature of ln(k) vs ln(lambda) below dust.curve.VALIDITY_FLOOR_AA, the Lyman limit)",
+        description="Controls how the torus reddening curve behaves in the EUV/X-ray (below ~912A), where no real dust-extinction measurement exists -- see dust.curve.k_lambda_with_floor. 0 continues the theta1_slope power law unbounded; negative values turn the curve over toward transparency at short wavelengths; positive values diverge faster.",
+        rationale="Genuinely MAGIC -- no informed prior exists for this regime (2026-09-13, PI direction: represent this as a real Tier-3 NPE-parameter with forced continuity/smoothness against the Tier-2 curve above, rather than a fixed extrapolation rule). By construction (dust.curve module docstring), value and slope match the theta1_slope curve exactly at the floor for every value in this range -- the range itself spans mild turnover through unbounded continuation and a modest excess-steepening allowance, not derived from any measurement.",
+    ),
 )
 # theta2 (UV bump) and theta3 (grey floor) are fixed at 0.0 here (not
 # registered/drawn) -- Gaskell et al. (2004) find AGN nuclear reddening
@@ -379,6 +389,16 @@ _add(
         citation="Prevot, Lequeux, Maurice, Prevot & Rocca-Volmerange (1984, A&A 132, 389) -- the SMC bar extinction curve, the steepest well-established Local Group extinction law, has a measured far-UV power-law index of n~1.2.",
         description="Power-law steepness of the host-disk-local reddening curve -- ordinary host-galaxy ISM dust, not AGN-processed nuclear dust, so not restricted to torus_reddening's narrower flat/SMC-like range, but bounded at the steepest real measured curve rather than an unchecked generic bracket.",
         rationale="Narrowed 2026-09-11 from an earlier Uniform(0,2) (MAGIC, reused wholesale from main's general-reach 'fit any real curve' bracket, appropriate for main's own use case but never checked against extrapolating the SAME slope as a bare power law all the way to the Lyman limit) -- a real theta1=1.897 draw under that range, steeper than the steepest real curve ever measured, produced a ~99% flux discontinuity at dust.curve.VALIDITY_FLOOR_AA (found via visual verification of the blended composite). Uniform(0, 1.3) keeps a small margin above Prevot et al.'s own n~1.2 rather than treating it as a hard ceiling no real population could ever exceed.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.host_disk_reddening.euv_curvature",
+        owner="quasar_continuum.host_disk_reddening",
+        tier=3,
+        physical=True,
+        distribution=Uniform(-2.0, 0.1),
+        units="unitless (curvature of ln(k) vs ln(lambda) below dust.curve.VALIDITY_FLOOR_AA, the Lyman limit)",
+        description="Controls how the host-disk reddening curve behaves in the EUV/X-ray (below ~912A), where no real dust-extinction measurement exists -- see dust.curve.k_lambda_with_floor. 0 continues the theta1_slope power law unbounded; negative values turn the curve over toward transparency at short wavelengths; positive values diverge faster.",
+        rationale="Genuinely MAGIC, drawn independently of torus_reddening's own euv_curvature (physically distinct dust, no reason to assume correlation) -- see that parameter's own rationale for the same 2026-09-13 PI direction this responds to.",
     ),
 )
 # theta2 (UV bump) and theta3 (grey floor) are fixed at 0.0 here for this

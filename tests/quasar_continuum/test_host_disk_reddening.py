@@ -20,12 +20,13 @@ class _FixedSampler:
         return {name: self._values[name] for name in names}
 
 
-def _fixed_sampler(cosi_disk, av_faceon, theta1_slope=0.5):
+def _fixed_sampler(cosi_disk, av_faceon, theta1_slope=0.5, euv_curvature=0.0):
     return _FixedSampler(
         {
             "quasar_continuum.host_disk_reddening.cosi_disk": cosi_disk,
             "quasar_continuum.host_disk_reddening.av_faceon": av_faceon,
             "quasar_continuum.host_disk_reddening.theta1_slope": theta1_slope,
+            "quasar_continuum.host_disk_reddening.euv_curvature": euv_curvature,
         }
     )
 
@@ -82,6 +83,20 @@ def test_default_sampler_returns_valid_result():
     assert 0.0 <= result.cosi_disk <= 1.0
     assert result.av_faceon >= 0.0
     assert np.isfinite(result.theta1_slope)
+    assert np.isfinite(result.euv_curvature)
+
+
+def test_transmission_continuous_across_the_validity_floor_for_any_curvature():
+    from demiurge.dust.curve import VALIDITY_FLOOR_AA
+
+    for curvature in (-2.0, -1.0, 0.0, 0.1):
+        result = draw_host_disk_reddening(
+            np.random.default_rng(0),
+            sampler=_fixed_sampler(cosi_disk=0.5, av_faceon=1.0, theta1_slope=0.5, euv_curvature=curvature),
+        )
+        just_below = result.transmission(np.array([VALIDITY_FLOOR_AA - 1e-6]))
+        just_above = result.transmission(np.array([VALIDITY_FLOOR_AA + 1e-6]))
+        np.testing.assert_allclose(just_below, just_above, rtol=1e-6)
 
 
 def test_reproducible_given_same_rng_seed():

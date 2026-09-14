@@ -33,16 +33,17 @@ exactly that additional, distinct, steeper component separately). `theta2`
 (UV bump) and `theta3` (grey floor) are fixed at 0.0 here (not drawn) per
 that same bump-free finding -- see `registry.py`'s rationale.
 
-`transmission()` uses `dust.curve.transmission_with_floor`, which holds
-k(lambda) flat at its own already-calibrated value below the Lyman limit
-(~912A) rather than extrapolating further or resetting to full
-transparency -- perfectly continuous, no new constant. See `dust.curve`'s
-module docstring for the three fixes tried before this one and why a hard
-on/off cutoff (whatever theta1 range it's paired with) is not how any real
-physical mechanism behaves at a boundary this curve has no actual feature
-at. torus_reddening's own theta1 range (already Gaskell-et-al.-2004-
-anchored, well below the SMC-bar ceiling host_disk_reddening's range
-needed) was never the problem.
+`transmission()` uses `dust.curve.transmission_with_floor`, which below the
+Lyman limit (~912A) evaluates a genuinely free (Tier-3) quadratic
+extension (`euv_curvature`, this module's own registered parameter),
+forced by construction to match the real theta1_slope curve's value and
+slope exactly at the floor -- see `dust.curve`'s module docstring for the
+four fixes tried before this one (hard cutoffs and a fixed "hold flat"
+rule were each found wanting) and why representing this unconstrained
+regime as a real per-mock random draw, not a fixed rule, is the actual
+fix (PI direction, 2026-09-13). torus_reddening's own theta1 range
+(already Gaskell-et-al.-2004-anchored, well below the SMC-bar ceiling
+host_disk_reddening's range needed) was never the problem.
 """
 from __future__ import annotations
 
@@ -57,20 +58,22 @@ from ..parameters.samplers import ParameterSampler, PriorSampler
 _COVERING_ANGLE_COSINE = "quasar_continuum.torus_reddening.covering_angle_cosine"
 _THETA0_AMPLITUDE = "quasar_continuum.torus_reddening.theta0_amplitude"
 _THETA1_SLOPE = "quasar_continuum.torus_reddening.theta1_slope"
+_EUV_CURVATURE = "quasar_continuum.torus_reddening.euv_curvature"
 
 
 @dataclass(frozen=True)
 class TorusReddeningResult:
     """`intercepted=False` means the sightline misses the torus entirely --
     `transmission()` is then identically 1.0 (no reddening) at every
-    wavelength, and `theta0_amplitude`/`theta1_slope` describe a draw that
-    was made (see RNG-hygiene note on `draw_torus_reddening`) but never
-    used."""
+    wavelength, and `theta0_amplitude`/`theta1_slope`/`euv_curvature`
+    describe a draw that was made (see RNG-hygiene note on
+    `draw_torus_reddening`) but never used."""
 
     intercepted: bool
     covering_angle_cosine: float
     theta0_amplitude: float
     theta1_slope: float
+    euv_curvature: float
     cosi: float
 
     def transmission(self, wave: np.ndarray) -> np.ndarray:
@@ -78,7 +81,9 @@ class TorusReddeningResult:
         wave = np.asarray(wave, dtype=float)
         if not self.intercepted:
             return np.ones_like(wave)
-        return transmission_with_floor(wave, self.theta0_amplitude, self.theta1_slope, theta2=0.0, theta3=0.0)
+        return transmission_with_floor(
+            wave, self.theta0_amplitude, self.theta1_slope, self.euv_curvature, theta2=0.0, theta3=0.0
+        )
 
 
 def draw_torus_reddening(
@@ -93,27 +98,30 @@ def draw_torus_reddening(
     -- torus interception is a deterministic consequence of that geometry,
     not an independent draw.
 
-    `covering_angle_cosine`/`theta0_amplitude`/`theta1_slope` are drawn
-    unconditionally, before checking interception -- not only when the
-    sightline turns out to be obscured. This is deliberate RNG hygiene: if
-    the amplitude/slope draws were skipped whenever `intercepted` turns out
-    False, a tiny change in some upstream parameter that flips `intercepted`
-    for one mock in a batch would desync the RNG stream for every subsequent
-    mock drawn under the same seed.
+    `covering_angle_cosine`/`theta0_amplitude`/`theta1_slope`/
+    `euv_curvature` are drawn unconditionally, before checking
+    interception -- not only when the sightline turns out to be obscured.
+    This is deliberate RNG hygiene: if the amplitude/slope draws were
+    skipped whenever `intercepted` turns out False, a tiny change in some
+    upstream parameter that flips `intercepted` for one mock in a batch
+    would desync the RNG stream for every subsequent mock drawn under the
+    same seed.
     """
     if sampler is None:
         sampler = PriorSampler()
     draws = sampler.sample(
-        [_COVERING_ANGLE_COSINE, _THETA0_AMPLITUDE, _THETA1_SLOPE],
+        [_COVERING_ANGLE_COSINE, _THETA0_AMPLITUDE, _THETA1_SLOPE, _EUV_CURVATURE],
         rng=rng,
     )
     covering_angle_cosine = float(draws[_COVERING_ANGLE_COSINE])
     theta0_amplitude = float(draws[_THETA0_AMPLITUDE])
     theta1_slope = float(draws[_THETA1_SLOPE])
+    euv_curvature = float(draws[_EUV_CURVATURE])
     return TorusReddeningResult(
         intercepted=cosi < covering_angle_cosine,
         covering_angle_cosine=covering_angle_cosine,
         theta0_amplitude=theta0_amplitude,
         theta1_slope=theta1_slope,
+        euv_curvature=euv_curvature,
         cosi=cosi,
     )

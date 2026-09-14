@@ -39,21 +39,24 @@ still shows a nonzero (minimum) reddening under the path-length law below --
 exact zero only ever comes from a dust-free `av_faceon` draw, not from
 inclination alone.
 
-`transmission()` uses `dust.curve.transmission_with_floor`, which holds
-k(lambda) flat at its own already-calibrated value below the Lyman limit
-(~912A) rather than extrapolating further or resetting to full
-transparency -- perfectly continuous, no new constant (see `dust.curve`'s
-module docstring for the three fixes tried before this one). `theta1_slope`'s
-own registered range (below) is separately narrowed, from an unchecked
-`Uniform(0,2)` inherited wholesale from main's general-reach convention to
-`Uniform(0,1.3)`, anchored on Prevot et al. (1984, A&A 132, 389)'s real
-measured SMC-bar far-UV power-law index (n~1.2) -- the steepest
-well-established Local Group extinction curve. That range was the actual
-root cause of the original bug found via visual verification of the
-blended composite (2026-09-11): a draw near the OLD range's top (1.897 --
-steeper than the steepest real curve ever measured) extrapolated as a bare
-power law reached k~5/T~0.01 by the Lyman limit -- worth keeping fixed
-independent of how the domain boundary itself is handled.
+`transmission()` uses `dust.curve.transmission_with_floor`, which below the
+Lyman limit (~912A) evaluates a genuinely free (Tier-3) quadratic
+extension (`euv_curvature`, this module's own registered parameter),
+forced by construction to match the real theta1_slope curve's value and
+slope exactly at the floor -- see `dust.curve`'s module docstring for the
+four fixes tried before this one and why representing this unconstrained
+regime as a real per-mock random draw, not a fixed rule, is the actual fix
+(PI direction, 2026-09-13). `theta1_slope`'s own registered range (below)
+is separately narrowed, from an unchecked `Uniform(0,2)` inherited
+wholesale from main's general-reach convention to `Uniform(0,1.3)`,
+anchored on Prevot et al. (1984, A&A 132, 389)'s real measured SMC-bar
+far-UV power-law index (n~1.2) -- the steepest well-established Local
+Group extinction curve. That range was the actual root cause of the
+original bug found via visual verification of the blended composite
+(2026-09-11): a draw near the OLD range's top (1.897 -- steeper than the
+steepest real curve ever measured) extrapolated as a bare power law
+reached k~5/T~0.01 by the Lyman limit -- worth keeping fixed independent
+of how the extension below the floor is handled.
 """
 from __future__ import annotations
 
@@ -68,6 +71,7 @@ from ..parameters.samplers import ParameterSampler, PriorSampler
 _COSI_DISK = "quasar_continuum.host_disk_reddening.cosi_disk"
 _AV_FACEON = "quasar_continuum.host_disk_reddening.av_faceon"
 _THETA1_SLOPE = "quasar_continuum.host_disk_reddening.theta1_slope"
+_EUV_CURVATURE = "quasar_continuum.host_disk_reddening.euv_curvature"
 
 # (Y) MAGIC: cap on the secant path-length factor -- prevents the naive
 # sec(i) law from diverging as cosi_disk -> 0 (exactly edge-on). Loosely
@@ -93,6 +97,7 @@ class HostDiskReddeningResult:
     cosi_disk: float
     av_faceon: float
     theta1_slope: float
+    euv_curvature: float
 
     @property
     def av(self) -> float:
@@ -106,7 +111,9 @@ class HostDiskReddeningResult:
         wave = np.asarray(wave, dtype=float)
         if self.av_faceon == 0.0:
             return np.ones_like(wave)
-        return transmission_with_floor(wave, self.av, self.theta1_slope, theta2=0.0, theta3=0.0)
+        return transmission_with_floor(
+            wave, self.av, self.theta1_slope, self.euv_curvature, theta2=0.0, theta3=0.0
+        )
 
 
 def draw_host_disk_reddening(
@@ -114,16 +121,17 @@ def draw_host_disk_reddening(
     *,
     sampler: Optional[ParameterSampler] = None,
 ) -> HostDiskReddeningResult:
-    """Draws `cosi_disk`, `av_faceon`, and `theta1_slope` -- all three,
-    unconditionally, every call (no branch skips a draw), so the RNG stream
-    stays reproducible/desync-free regardless of which branch a given mock's
-    `av_faceon` draw happens to land in (same RNG-hygiene discipline as
-    `torus_reddening.draw_torus_reddening`)."""
+    """Draws `cosi_disk`, `av_faceon`, `theta1_slope`, and `euv_curvature` --
+    all four, unconditionally, every call (no branch skips a draw), so the
+    RNG stream stays reproducible/desync-free regardless of which branch a
+    given mock's `av_faceon` draw happens to land in (same RNG-hygiene
+    discipline as `torus_reddening.draw_torus_reddening`)."""
     if sampler is None:
         sampler = PriorSampler()
-    draws = sampler.sample([_COSI_DISK, _AV_FACEON, _THETA1_SLOPE], rng=rng)
+    draws = sampler.sample([_COSI_DISK, _AV_FACEON, _THETA1_SLOPE, _EUV_CURVATURE], rng=rng)
     return HostDiskReddeningResult(
         cosi_disk=float(draws[_COSI_DISK]),
         av_faceon=float(draws[_AV_FACEON]),
         theta1_slope=float(draws[_THETA1_SLOPE]),
+        euv_curvature=float(draws[_EUV_CURVATURE]),
     )

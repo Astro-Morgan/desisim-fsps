@@ -98,7 +98,7 @@ def test_flux_finite_and_nonnegative_for_positive_inputs():
 def test_torus_reddening_reduces_quasar_contribution_only():
     unreddened = blend_continua(_galaxy(1.0), _quasar(1.0), quasar_frac=0.7)
     torus = TorusReddeningResult(
-        intercepted=True, covering_angle_cosine=0.5, theta0_amplitude=1.0, theta1_slope=0.3, cosi=0.1
+        intercepted=True, covering_angle_cosine=0.5, theta0_amplitude=1.0, theta1_slope=0.3, euv_curvature=0.0, cosi=0.1
     )
     reddened = blend_continua(_galaxy(1.0), _quasar(1.0), quasar_frac=0.7, torus=torus)
     # Reddening reduces the OBSERVED quasar light reaching the composite,
@@ -111,7 +111,7 @@ def test_torus_reddening_reduces_quasar_contribution_only():
 
 
 def test_host_disk_reddening_with_zero_av_faceon_has_no_effect():
-    dust_free = HostDiskReddeningResult(cosi_disk=0.2, av_faceon=0.0, theta1_slope=0.5)
+    dust_free = HostDiskReddeningResult(cosi_disk=0.2, av_faceon=0.0, theta1_slope=0.5, euv_curvature=0.0)
     with_dust = blend_continua(_galaxy(1.0), _quasar(1.0), quasar_frac=0.5, host_disk=dust_free)
     without = blend_continua(_galaxy(1.0), _quasar(1.0), quasar_frac=0.5)
     np.testing.assert_allclose(with_dust.flux, without.flux)
@@ -120,7 +120,7 @@ def test_host_disk_reddening_with_zero_av_faceon_has_no_effect():
 def test_no_reddening_arguments_gives_unit_transmission():
     with_none = blend_continua(_galaxy(1.0), _quasar(1.0), quasar_frac=0.5)
     torus_transparent = TorusReddeningResult(
-        intercepted=False, covering_angle_cosine=0.9, theta0_amplitude=1.0, theta1_slope=0.3, cosi=0.95
+        intercepted=False, covering_angle_cosine=0.9, theta0_amplitude=1.0, theta1_slope=0.3, euv_curvature=0.0, cosi=0.95
     )
     with_transparent_torus = blend_continua(
         _galaxy(1.0), _quasar(1.0), quasar_frac=0.5, torus=torus_transparent

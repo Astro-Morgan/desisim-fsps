@@ -18,12 +18,13 @@ class _FixedSampler:
         return {name: self._values[name] for name in names}
 
 
-def _fixed_sampler(covering_angle_cosine, theta0_amplitude=1.0, theta1_slope=0.3):
+def _fixed_sampler(covering_angle_cosine, theta0_amplitude=1.0, theta1_slope=0.3, euv_curvature=0.0):
     return _FixedSampler(
         {
             "quasar_continuum.torus_reddening.covering_angle_cosine": covering_angle_cosine,
             "quasar_continuum.torus_reddening.theta0_amplitude": theta0_amplitude,
             "quasar_continuum.torus_reddening.theta1_slope": theta1_slope,
+            "quasar_continuum.torus_reddening.euv_curvature": euv_curvature,
         }
     )
 
@@ -85,6 +86,46 @@ def test_default_sampler_draws_every_registered_parameter():
     assert 0.0 <= result.covering_angle_cosine or result.covering_angle_cosine is not None
     assert np.isfinite(result.theta0_amplitude)
     assert np.isfinite(result.theta1_slope)
+    assert np.isfinite(result.euv_curvature)
+
+
+def test_transmission_continuous_across_the_validity_floor_for_any_curvature():
+    from demiurge.dust.curve import VALIDITY_FLOOR_AA
+
+    for curvature in (-2.0, -1.0, 0.0, 0.1):
+        result = draw_torus_reddening(
+            np.random.default_rng(0),
+            cosi=0.1,
+            sampler=_fixed_sampler(covering_angle_cosine=0.3, theta0_amplitude=1.0, theta1_slope=0.5, euv_curvature=curvature),
+        )
+        just_below = result.transmission(np.array([VALIDITY_FLOOR_AA - 1e-6]))
+        just_above = result.transmission(np.array([VALIDITY_FLOOR_AA + 1e-6]))
+        np.testing.assert_allclose(just_below, just_above, rtol=1e-6)
+
+
+def test_zero_curvature_reproduces_the_plain_power_law_below_the_floor():
+    from demiurge.dust.curve import VALIDITY_FLOOR_AA, k_lambda
+
+    result = draw_torus_reddening(
+        np.random.default_rng(0),
+        cosi=0.1,
+        sampler=_fixed_sampler(covering_angle_cosine=0.3, theta0_amplitude=1.0, theta1_slope=0.5, euv_curvature=0.0),
+    )
+    wave = np.array([500.0, 100.0])
+    t = result.transmission(wave)
+    expected_k = k_lambda(wave, 1.0, 0.5)
+    np.testing.assert_allclose(t, 10.0 ** (-0.4 * expected_k), rtol=1e-9)
+    assert wave.min() < VALIDITY_FLOOR_AA  # sanity: this is actually exercising the below-floor branch
+
+
+def test_negative_curvature_turns_the_curve_back_toward_transparency():
+    result = draw_torus_reddening(
+        np.random.default_rng(0),
+        cosi=0.1,
+        sampler=_fixed_sampler(covering_angle_cosine=0.3, theta0_amplitude=1.0, theta1_slope=0.5, euv_curvature=-2.0),
+    )
+    t = result.transmission(np.array([900.0, 300.0, 50.0, 1.0]))
+    assert t[-1] > t[1]  # far below the floor, transmission rises back toward 1
 
 
 def test_reproducible_given_same_rng_seed():

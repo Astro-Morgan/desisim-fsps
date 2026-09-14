@@ -331,17 +331,32 @@ $k\sim330$, $T\sim10^{-133}$ at 100\,\AA{}). Below $\lambda=912\,
 \mathrm{\AA}$ (the Lyman limit -- used here only as a recognizable UV
 boundary, not because dust-grain physics has any actual feature there:
 the real Lyman-limit discontinuity belongs to neutral-hydrogen
-photoionization, a distinct, deliberately not-yet-built mechanism), $k$ is
-held FLAT at its own already-calibrated value AT that boundary, rather
-than evaluated further (diverges) or reset to zero (an equally arbitrary
-discontinuity in the other direction -- real dust does not become
-transparent past some wavelength). This keeps transmission perfectly
-continuous everywhere by construction, with no new free constant: two
+photoionization, a distinct, deliberately not-yet-built mechanism), $k$
+follows a QUADRATIC in $\ln\lambda$,
+\begin{equation}
+    \ln k(\lambda) = \ln k(\lambda_{\rm floor}) - \theta_1 (\ln\lambda - \ln\lambda_{\rm floor})
+                       + \theta_{\rm euv} (\ln\lambda - \ln\lambda_{\rm floor})^2,
+\end{equation}
+with a new free parameter $\theta_{\rm euv}$
+(\texttt{euv\_curvature}) -- since no real physical treatment of this
+regime exists, per PI direction (2026-09-13) this is represented as a
+genuine Tier-3 NPE-parameter rather than a fixed extrapolation rule. By
+construction, value AND slope match the real $\theta_1$ curve exactly at
+$\lambda_{\rm floor}$ for ANY $\theta_{\rm euv}$ (verified numerically,
+not merely derived): $\theta_{\rm euv}=0$ exactly continues the plain
+power law (unbounded, not excluded); $\theta_{\rm euv}<0$ turns the curve
+over toward transparency at shorter wavelengths; $\theta_{\rm euv}>0$
+diverges faster. $\theta_{\rm euv} \sim \mathrm{Uniform}(-2.0, 0.1)$ (PI
+direction), Tier 3, drawn independently for torus- and host-disk-local
+reddening (physically distinct dust, no assumed correlation). Three
 earlier attempts -- clamping transmission to exactly 1 below the floor
 (produced a real, visually obvious step, since the curve's own raw value
-was already far from 1 by the time the floor engaged), and smoothly
-saturating $k$ at a fixed but ungrounded ceiling constant -- were each
-tried, found wanting on visual inspection, and discarded before this one.
+was already far from 1 by the time the floor engaged), smoothly
+saturating $k$ at a fixed but ungrounded ceiling constant, and holding $k$
+flat at its boundary value (perfectly continuous, but a fixed
+deterministic rule with no free parameter, inconsistent with this
+project's own convention that unconstrained physics gets a real Tier-3
+prior) -- were each tried, found wanting, and discarded before this one.
 The same mechanism applies to host-disk-local reddening below.
 \citet{GaskellEtAl2004} find AGN nuclear reddening curves significantly
 flatter in the UV than the local ISM/SMC, with no 2175\,\AA\ bump, and

@@ -29,7 +29,10 @@
     "n_age": 107,
     "age_logyr_min": 5.0,
     "age_logyr_max": 10.3,
-    "precompute_time_s": 150.91719388961792,
+    "n_mc_samples": 25,
+    "mc_jitter_half_width_dex": 0.025000000000000005,
+    "mc_jitter_seed": 20260914,
+    "precompute_time_s": 506.7784683704376,
     "file_size_mb": 94.091648
   },
   "dynamic": {
@@ -62,7 +65,10 @@
     "n_age": 107,
     "age_logyr_min": 5.0,
     "age_logyr_max": 10.3,
-    "precompute_time_s": 498.6873290538788,
+    "n_mc_samples": 25,
+    "mc_jitter_half_width_dex": 0.025000000000000005,
+    "mc_jitter_seed": 20260914,
+    "precompute_time_s": 819.7706620693207,
     "file_size_mb": 94.091648
   }
 }

@@ -17,12 +17,36 @@ the fsps_direct GalaxyContinuum backend needs python-fsps (and therefore a
 Fortran compiler; WSL2 on Windows, see BUILD.md), the pretabulated backend
 does not.
 
-Cost: 20 Z points x ~25s/point x 2 IMF modes =~ 1000s (~17 min) on this
-hardware/library (C3K_HR) combination, confirmed empirically 2026-09-04.
+Cost: 20 Z points x ~25s/point x 2 IMF modes =~ 1000s (~17 min) for the
+one-time per-Z isochrone setup, on this hardware/library (C3K_HR)
+combination, confirmed empirically 2026-09-04 -- PLUS the per-age Monte
+Carlo sampling described below, which adds roughly another ~15 min (K x
+N_AGE extra `get_spectrum` calls per Z point at ~0.008s each once the
+isochrone is cached; confirmed empirically 2026-09-14), for a total of
+roughly ~30 min per full two-IMF-mode build.
 
 Usage:
     python scripts/build_galaxy_continuum_ssp_grid.py
     python scripts/build_galaxy_continuum_ssp_grid.py --imf-modes dynamic  # rebuild just one
+
+Why each age is Monte Carlo-averaged, not sampled once (found + approved
+2026-09-14): querying FSPS at a single exact age near certain evolutionary
+transitions (e.g. ~60-71 Myr at Z~0.006) can jump by >10 orders of magnitude
+in the EUV/He+-ionizing tail (~100-300A), because that flux is dominated by
+a vanishingly small number of extremely short-lived hot post-main-sequence
+stars -- whether the isochrone's finite mass grid happens to sample one at a
+given exact age is essentially a coin flip, confirmed to be a property of
+FSPS/MIST's own isochrone response (reproduced by querying the official
+python-fsps directly at densely-spaced ages), not an artifact of this
+script or its interpolation. That jump is real, physical, and not the bug
+-- suppressing it would misrepresent the isochrone. The actual bug is that
+a single raw sample bakes in one arbitrary, non-reproducible realization of
+that stochastic response into the shipped grid forever. Averaging many
+finely-jittered sub-age samples around each target age instead estimates
+the *expectation* of that stochastic process -- a smooth, reproducible
+function of age -- which is what a fixed, shipped lookup table should
+represent. See `_JITTER_HALF_WIDTH_DEX`/`N_MC_SAMPLES` below for the
+exact scheme.
 
 Design rationale for the Z-grid bounds/resolution (2026-09-04, full
 derivation in project history -- summarized here so this script is
@@ -66,6 +90,16 @@ N_Z = 20
 
 AGE_LOGYR_MIN, AGE_LOGYR_MAX, N_AGE = 5.0, 10.3, 107  # FSPS's own native ssp_ages grid, verified 2026-09-04
 
+# Monte Carlo per-age averaging (2026-09-14, see module docstring for the full why):
+N_MC_SAMPLES = 25  # within the approved 20-30 range
+# Half-width of each age's jitter window, in dex (log10 yr) -- set to exactly half the
+# native grid spacing so each age's window is its own non-overlapping cell (the range
+# that would map to this grid point under the runtime bilinear interpolation), not an
+# arbitrary number: neither so narrow it fails to average over a several-Myr-scale
+# transition, nor so wide it blurs into a neighboring age's own territory.
+_JITTER_HALF_WIDTH_DEX = 0.5 * (AGE_LOGYR_MAX - AGE_LOGYR_MIN) / (N_AGE - 1)
+_JITTER_SEED = 20260914  # fixed so the shipped grid is exactly reproducible from source
+
 
 def build_grid(imf_mode: str, out_path: Path):
     import fsps  # deferred: only this build script needs python-fsps, not the runtime package
@@ -77,6 +111,8 @@ def build_grid(imf_mode: str, out_path: Path):
 
     sp = fsps.StellarPopulation(zcontinuous=1, sfh=0, imf_type=2, dust1=0.0, dust2=0.0)
     z_grid = np.logspace(np.log10(Z_FLOOR), np.log10(Z_MASTER_MAX), N_Z)
+    age_logyr_grid = np.linspace(AGE_LOGYR_MIN, AGE_LOGYR_MAX, N_AGE)
+    rng = np.random.default_rng(_JITTER_SEED)
 
     wave = None
     grid = None
@@ -91,13 +127,28 @@ def build_grid(imf_mode: str, out_path: Path):
         sp.params["imf1"] = slopes.imf1
         sp.params["imf2"] = slopes.imf2
         sp.params["imf3"] = slopes.imf3
-        w, f_grid = sp.get_spectrum(tage=0, peraa=False)
-        if wave is None:
-            wave = w
-            grid = np.lib.format.open_memmap(
-                str(out_path), mode="w+", dtype=np.float32, shape=(N_Z, f_grid.shape[0], f_grid.shape[1])
+
+        for j, target_logyr in enumerate(age_logyr_grid):
+            jittered_logyr = rng.uniform(
+                target_logyr - _JITTER_HALF_WIDTH_DEX, target_logyr + _JITTER_HALF_WIDTH_DEX, size=N_MC_SAMPLES
             )
-        grid[i] = f_grid.astype(np.float32)
+            summed = None
+            for logyr_sample in jittered_logyr:
+                tage_gyr = float(10.0**logyr_sample / 1.0e9)
+                w, f = sp.get_spectrum(tage=tage_gyr, peraa=False)
+                if wave is None:
+                    wave = w
+                if summed is None:
+                    summed = np.zeros_like(f)
+                summed += f
+            averaged = summed / N_MC_SAMPLES
+
+            if grid is None:
+                grid = np.lib.format.open_memmap(
+                    str(out_path), mode="w+", dtype=np.float32, shape=(N_Z, N_AGE, averaged.shape[0])
+                )
+            grid[i, j] = averaged.astype(np.float32)
+
         print(
             f"  [{imf_mode}] Z[{i}]={z_val:.6f} (logzsol={sp.params['logzsol']:.3f}) done, "
             f"elapsed={time.time()-t0:.1f}s"
@@ -116,6 +167,9 @@ def build_grid(imf_mode: str, out_path: Path):
         n_age=N_AGE,
         age_logyr_min=AGE_LOGYR_MIN,
         age_logyr_max=AGE_LOGYR_MAX,
+        n_mc_samples=N_MC_SAMPLES,
+        mc_jitter_half_width_dex=_JITTER_HALF_WIDTH_DEX,
+        mc_jitter_seed=_JITTER_SEED,
         precompute_time_s=elapsed,
         file_size_mb=file_size_mb,
     )

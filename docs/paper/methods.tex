@@ -169,6 +169,35 @@ suite):
     time from order 10~s to order 1--10~ms.
 \end{itemize}
 
+\paragraph{Monte Carlo age averaging.} FSPS's isochrone response near
+certain rapid evolutionary transitions (e.g.\ $\sim$60--71~Myr at
+$Z\!\sim\!0.006$) can change by many orders of magnitude in the EUV/He$^+$-
+ionizing tail ($\sim$100--300\AA) between two nearby ages, because that
+flux is dominated by a vanishingly small number of extremely short-lived
+hot post-main-sequence stars -- whether the isochrone's finite stellar-mass
+grid happens to place one at a given exact age is essentially stochastic,
+confirmed to be a genuine property of the FSPS/MIST isochrone response
+itself (reproduced by querying the official code directly at densely
+spaced ages), not an artifact of either implementation above. This jump is
+physical and is not itself a problem; the actual defect is that a
+\emph{single} raw sample at each grid age bakes one arbitrary,
+non-reproducible realization of that stochastic response permanently into
+the shipped \textbf{pretabulated} grid. Each of the grid's age points is
+therefore built as the mean of $K=25$ FSPS evaluations at ages drawn
+uniformly from a small window (half-width equal to half the native age
+grid's own spacing) around that target age, estimating the smooth,
+reproducible \emph{expectation} of the stochastic response rather than one
+arbitrary draw of it (\texttt{scripts/build\_galaxy\_continuum\_ssp\_grid.py}).
+\textbf{fsps\_direct} is unaffected by default -- a real narrow recent-burst
+segment legitimately can show this stochastic variance, and hiding it would
+misrepresent the isochrone -- but accepts an opt-in \texttt{n\_mc\_samples}
+argument that applies the analogous averaging to its own per-segment
+tabulated-SFH calls (each trial re-evaluated with the segment's whole time
+support shifted by a small random $\Delta t$, drawn the same way, holding
+the observation time fixed), for callers who want the population
+expectation rather than one stochastic realization -- e.g.\ for a fair
+comparison against the now-smoothed pretabulated grid.
+
 \subsection{Quasar Continuum} \label{sec:quasar-continuum}
 Mirrors \texttt{src/demiurge/quasar\_continuum/}. Produces the AGN
 accretion-disk continuum -- the additive AGN contribution to the

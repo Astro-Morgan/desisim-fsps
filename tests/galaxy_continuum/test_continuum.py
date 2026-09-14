@@ -144,12 +144,22 @@ def test_pretabulated_backend_agrees_with_fsps_direct_truth(imf_mode):
     reference the grid design was actually profiled against -- this is a
     regression/sanity gate, not a precision claim; see project history for
     the actual measured fidelity numbers the grid's Z-resolution was chosen
-    to hit."""
+    to hit.
+
+    Ground truth uses `n_mc_samples > 1` (2026-09-14, see continuum.py's
+    module docstring): the pretabulated grid now stores the *expectation*
+    of FSPS's isochrone response at each age, not one raw single-sample
+    draw (see scripts/build_galaxy_continuum_ssp_grid.py's module docstring
+    for why one raw draw isn't a meaningful reference near certain
+    evolutionary transitions). Comparing against an un-averaged single
+    fsps_direct draw would compare the grid's smoothed expectation against
+    exactly the noisy quantity it's intentionally averaged away from --
+    apples to oranges, not a real fidelity check."""
     rng_direct = np.random.default_rng(4)
     rng_pretab = np.random.default_rng(4)
 
     gc_direct = GalaxyContinuum.from_dense_basis(
-        rng_direct, t_obs_gyr=10.0, imf_mode=imf_mode, backend="fsps_direct", n_bins=6
+        rng_direct, t_obs_gyr=10.0, imf_mode=imf_mode, backend="fsps_direct", n_bins=6, n_mc_samples=25
     )
     gc_pretab = GalaxyContinuum.from_dense_basis(
         rng_pretab, t_obs_gyr=10.0, imf_mode=imf_mode, backend="pretabulated"
@@ -159,6 +169,64 @@ def test_pretabulated_backend_agrees_with_fsps_direct_truth(imf_mode):
     rel_err = np.abs(gc_pretab.flux[mask] - gc_direct.flux[mask]) / gc_direct.flux[mask]
     rms_rel_err = np.sqrt(np.mean(rel_err**2))
     assert rms_rel_err < 0.10, f"pretabulated vs fsps_direct RMS relative error too high: {rms_rel_err:.4f}"
+
+
+def test_fsps_direct_default_is_unsmoothed_single_draw():
+    """Default behavior (n_mc_samples=1) must stay exactly what it was
+    before the 2026-09-14 smoothing option existed -- a real narrow-burst
+    stochastic jump is physical and fsps_direct's default should keep
+    showing it, not silently average it away (project direction, 2026-09-14:
+    the jump itself is fine, only the *pretabulated grid's* single arbitrary
+    realization was the actual bug)."""
+    t = np.linspace(0.1, 5.0, 30)
+    sfr = np.ones_like(t)
+    z = np.full_like(t, 0.0142)
+
+    gc_default = GalaxyContinuum.from_arrays(t, sfr, z, backend="fsps_direct", n_bins=2)
+    assert gc_default.meta["n_mc_samples"] == 1
+
+    sp = raw_fsps.StellarPopulation(zcontinuous=1, sfh=3, imf_type=2)
+    sp.params["logzsol"] = 0.0
+    sp.set_tabular_sfh(t, sfr)
+    wave_manual, flux_manual = sp.get_spectrum(tage=float(t[-1]), peraa=False)
+    np.testing.assert_allclose(gc_default.flux, flux_manual, rtol=1e-6)
+
+
+def test_fsps_direct_mc_averaging_is_reproducible_and_differs_from_single_draw():
+    t = np.linspace(0.01, 0.09, 40)  # a young, narrow history -- near the known transition region
+    sfr = np.ones_like(t)
+    z = np.full_like(t, 0.00614)
+
+    gc_single = GalaxyContinuum.from_arrays(t, sfr, z, backend="fsps_direct", n_bins=1)
+    gc_mc_a = GalaxyContinuum.from_arrays(
+        t, sfr, z, backend="fsps_direct", n_bins=1, n_mc_samples=10, mc_rng=np.random.default_rng(0)
+    )
+    gc_mc_b = GalaxyContinuum.from_arrays(
+        t, sfr, z, backend="fsps_direct", n_bins=1, n_mc_samples=10, mc_rng=np.random.default_rng(0)
+    )
+
+    assert np.all(np.isfinite(gc_mc_a.flux))
+    np.testing.assert_array_equal(gc_mc_a.flux, gc_mc_b.flux)  # same mc_rng seed -> reproducible
+    assert not np.allclose(gc_mc_a.flux, gc_single.flux)  # averaging over jittered ages != one raw draw
+
+
+def test_n_mc_samples_rejected_for_pretabulated_backend():
+    t = np.linspace(0.5, 8.0, 10)
+    with pytest.raises(ValueError):
+        GalaxyContinuum.from_arrays(
+            t, np.ones_like(t), np.linspace(0.001, 0.01, 10), backend="pretabulated", n_mc_samples=5
+        )
+
+
+def test_from_arrays_length_one_ignores_n_mc_samples():
+    """The degenerate single-population delegation must stay exact
+    regardless of n_mc_samples -- from_single_population never smooths."""
+    age_gyr, z_absolute = 4.0, 0.008
+    direct = GalaxyContinuum.from_single_population(age_gyr=age_gyr, z_absolute=z_absolute)
+    via_arrays = GalaxyContinuum.from_arrays(
+        [age_gyr], [0.0], [z_absolute], backend="fsps_direct", n_mc_samples=25
+    )
+    np.testing.assert_array_equal(direct.flux, via_arrays.flux)
 
 
 def test_pretabulated_clipping_is_confined_to_negligible_early_steps():

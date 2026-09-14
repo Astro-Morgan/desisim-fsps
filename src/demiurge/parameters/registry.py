@@ -55,7 +55,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .distributions import Dirichlet, Distribution, LogNormal, LogUniform, Normal, Uniform
+from .distributions import Dirichlet, Distribution, LogNormal, LogUniform, Normal, Uniform, ZeroInflated
 
 
 @dataclass(frozen=True)
@@ -229,11 +229,11 @@ _add(
         owner="quasar_continuum.agnsed",
         tier=2,
         physical=True,
-        distribution=Uniform(0.5, 1.0),
+        distribution=Uniform(0.0, 1.0),
         units="unitless (cosine of the disc/warm-Comptonisation inclination angle)",
-        citation="Urry & Padovani (1995, PASP 107, 803) -- the standard AGN unification argument that type-1 (unobscured broad-line) selection restricts the viewing angle to within the torus opening half-angle, canonically i <~ 60 deg.",
+        citation="Antonucci (1993, ARA&A 31, 473) and Netzer (2015, ARA&A 53, 365) -- the standard AGN unification argument treats the torus/disc symmetry axis as isotropically oriented across the general AGN population (uniform in cos i), with type-1 vs. type-2 classification an EMERGENT consequence of whether a given random sightline happens to intercept the torus, not a precondition on which systems get generated.",
         description="Cosine of the inclination angle applied to the disc and warm-Comptonisation components (agnsed.f's own cosi/0.5 geometric factor; the hot corona is treated as isotropic and unaffected).",
-        rationale="Lower bound cos(60deg)=0.5 anchors the type-1-selection argument; the exact torus opening angle is itself a real range in the unification literature (not precision-fit here), and AGNSED's own default parameter file uses cosi=0.5 as its normalization point, consistent with this being the edge of the allowed range rather than an arbitrary floor.",
+        rationale="Widened from an earlier Uniform(0.5, 1.0) (2026-09-09, restricted to Urry & Padovani (1995)'s type-1-selection argument, i <~ 60 deg) to the full isotropic Uniform(0.0, 1.0) (2026-09-10). That restriction was a workaround for not yet having any torus-obscuration machinery -- generation was limited to geometries that would already look type-1. Now that quasar_continuum.torus_reddening exists to model obscuration explicitly as a deterministic consequence of this same cosi draw (see that module), restricting cosi itself is no longer necessary or correct: the population should be generated isotropically, and the reddening layer -- not a pre-restricted prior -- is what should produce the type-1/type-2 appearance split. cosi_scale=cosi/0.5 (continuum.py) remains well-behaved across the full range (->0 as edge-on, the physically expected near-total dimming of direct disc/warm flux for a geometrically thin disc; hot corona stays isotropic and unaffected either way).",
     ),
     NPEParameter(
         name="quasar_continuum.agnsed.hard_xray_luminosity_fraction",
@@ -289,6 +289,146 @@ _add(
         citation="Kubota & Done (2018, MNRAS 480, 1247) Table 2 -- their own per-object fits give R_warm/R_hot = 151/43=3.51 (NGC 5548), 40/21=1.90 (Mrk 509), 35/9.8=3.57 (PG 1115+407), Sec. 4.3.",
         description="Ratio of the warm-Comptonisation outer radius to the hot-corona outer radius (r_hot itself is derived from hard_xray_luminosity_fraction, not drawn directly -- see geometry.py).",
         rationale="KD18's own general-grid convention (r_warm=2*r_hot, Sec. 4.3, 'guided by the fits to individual objects') is a simplifying tie, not a measured law -- their own Table 2 per-object fits show real scatter around it (1.9-3.6), which is what this prior's range reflects directly rather than an independently chosen bracket.",
+    ),
+)
+
+# =============================================================================
+# quasar_continuum.torus_reddening -- the compact, nuclear-scale AGN dust
+# screen from the classical unification-model torus (distinct from
+# quasar_continuum.host_disk_reddening's host-galaxy-scale screen, and from
+# any future galaxy-global diffuse ISM reddening -- three physically
+# different screens). See torus_reddening.py's module docstring for the
+# deterministic cosi-vs-covering_angle_cosine interception mechanism.
+# =============================================================================
+_add(
+    NPEParameter(
+        name="quasar_continuum.torus_reddening.covering_angle_cosine",
+        owner="quasar_continuum.torus_reddening",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.13, 0.47),
+        units="unitless (cosine of the torus half-opening angle, measured from the pole)",
+        citation="Ezhikode et al. (2017, MNRAS 472, 3492) -- mean torus covering factor f_c = 0.30 +/- 0.17 across 51 local type-1 AGN (IR/bolometric method).",
+        description="quasar_continuum.agnsed.cosi intercepts the torus (torus reddening applies) iff cosi < this value; not intercepted otherwise (torus_reddening.py).",
+        rationale="Uniform(mean-1sigma, mean+1sigma) from Ezhikode et al.'s own measured population scatter -- an approximation to their reported distribution shape using an existing family rather than adding a new bounded-shape distribution (e.g. Beta) for this one parameter alone.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.torus_reddening.theta0_amplitude",
+        owner="quasar_continuum.torus_reddening",
+        tier=3,
+        physical=True,
+        distribution=Uniform(0.1, 3.0),
+        units="mag-scale amplitude (dust.curve.k_lambda's theta0, at lambda_v=5500A)",
+        description="Torus-local reddening magnitude when the sightline intercepts the torus (see covering_angle_cosine above); irrelevant, unused, when it does not.",
+        rationale="MAGIC -- matches main's own precedent order-of-magnitude bracket (negligible to heavily obscured) for this kind of amplitude; no dedicated covering-factor-to-E(B-V) calibration exists yet to derive a tighter, citable range.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.torus_reddening.theta1_slope",
+        owner="quasar_continuum.torus_reddening",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.0, 0.8),
+        units="unitless (dust.curve.k_lambda's theta1, power-law slope)",
+        citation="Gaskell, Goosmann, Antonucci & Whysong (2004, ApJ 616, 147) -- AGN nuclear reddening curves are significantly flatter in the UV than the local ISM/SMC; radio-loud (least host-contaminated) AGN curves specifically 'very flat'.",
+        description="Power-law steepness of the torus-local reddening curve.",
+        rationale="Upper bound well below main's general-reach theta1 range (0.0-2.0, SMC-like at the top) to reflect Gaskell et al.'s specific finding that nuclear (torus-scale) curves are flatter than SMC, not merely bounded by it -- host-galaxy-scale reddening (steeper, per their own radio-quiet-vs-radio-loud comparison) is handled separately by quasar_continuum.host_disk_reddening, consistent with that finding.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.torus_reddening.euv_curvature",
+        owner="quasar_continuum.torus_reddening",
+        tier=3,
+        physical=True,
+        distribution=Uniform(-2.0, 0.1),
+        units="unitless (curvature of ln(k) vs ln(lambda) below dust.curve.VALIDITY_FLOOR_AA, the Lyman limit)",
+        description="Controls how the torus reddening curve behaves in the EUV/X-ray (below ~912A), where no real dust-extinction measurement exists -- see dust.curve.k_lambda_with_floor. 0 continues the theta1_slope power law unbounded; negative values turn the curve over toward transparency at short wavelengths; positive values diverge faster.",
+        rationale="Genuinely MAGIC -- no informed prior exists for this regime (2026-09-13, PI direction: represent this as a real Tier-3 NPE-parameter with forced continuity/smoothness against the Tier-2 curve above, rather than a fixed extrapolation rule). By construction (dust.curve module docstring), value and slope match the theta1_slope curve exactly at the floor for every value in this range -- the range itself spans mild turnover through unbounded continuation and a modest excess-steepening allowance, not derived from any measurement.",
+    ),
+)
+# theta2 (UV bump) and theta3 (grey floor) are fixed at 0.0 here (not
+# registered/drawn) -- Gaskell et al. (2004) find AGN nuclear reddening
+# curves show no 2175A bump; a grey floor isn't needed to capture the
+# flat/SMC-like family's reach with just an amplitude+slope. See
+# torus_reddening.py.
+
+# =============================================================================
+# quasar_continuum.host_disk_reddening -- the host galaxy's OWN disk
+# material along the specific nuclear sightline to the AGN (distinct from
+# quasar_continuum.torus_reddening's compact nuclear-scale screen, and from
+# any future galaxy-global diffuse ISM reddening). See
+# host_disk_reddening.py's module docstring for the geometry.
+# =============================================================================
+_add(
+    NPEParameter(
+        name="quasar_continuum.host_disk_reddening.cosi_disk",
+        owner="quasar_continuum.host_disk_reddening",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.0, 1.0),
+        units="unitless (cosine of the host-galaxy-disk inclination to our line of sight)",
+        citation="Hopkins, Hernquist, Hayward & Narayanan (2012, MNRAS 425, 1121) -- the AGN/torus symmetry axis is not correlated with the host galaxy's own large-scale disk axis (independent angular-momentum transport at very different physical scales); standard isotropic-orientation argument for the Uniform-in-cosine shape itself.",
+        description="Host-galaxy-disk inclination -- deliberately independent of quasar_continuum.agnsed.cosi (real AGN host disks are not assumed coplanar with the AGN disk/torus).",
+        rationale="Drawn fully independently of agnsed.cosi per Hopkins et al.'s finding: if the two axes are randomly oriented relative to EACH OTHER, then drawing both isotropically relative to our fixed sightline is not a simplifying shortcut, it is what the actual 3D geometry gives once relative alignment is accounted for.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.host_disk_reddening.av_faceon",
+        owner="quasar_continuum.host_disk_reddening",
+        tier=3,
+        physical=True,
+        distribution=ZeroInflated(p_zero=0.3, base=LogUniform(0.05, 2.0)),
+        units="mag-scale amplitude (dust.curve.k_lambda's theta0 at face-on, i.e. before the inclination path-length scaling in host_disk_reddening.py)",
+        description="Face-on-equivalent host-disk reddening amplitude; the actual applied amplitude is this value scaled by a path-length factor depending on cosi_disk (host_disk_reddening.py).",
+        rationale="ZeroInflated chosen specifically because a real, non-negligible fraction of hosts (e.g. gas-poor early-type disks) are genuinely dust-free, independent of viewing geometry -- LogUniform/LogNormal structurally cannot represent that. p_zero and the LogUniform bracket are both MAGIC (no dedicated per-quantity literature check performed yet) pending a real calibration pass.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.host_disk_reddening.theta1_slope",
+        owner="quasar_continuum.host_disk_reddening",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.0, 1.3),
+        units="unitless (dust.curve.k_lambda's theta1, power-law slope)",
+        citation="Prevot, Lequeux, Maurice, Prevot & Rocca-Volmerange (1984, A&A 132, 389) -- the SMC bar extinction curve, the steepest well-established Local Group extinction law, has a measured far-UV power-law index of n~1.2.",
+        description="Power-law steepness of the host-disk-local reddening curve -- ordinary host-galaxy ISM dust, not AGN-processed nuclear dust, so not restricted to torus_reddening's narrower flat/SMC-like range, but bounded at the steepest real measured curve rather than an unchecked generic bracket.",
+        rationale="Narrowed 2026-09-11 from an earlier Uniform(0,2) (MAGIC, reused wholesale from main's general-reach 'fit any real curve' bracket, appropriate for main's own use case but never checked against extrapolating the SAME slope as a bare power law all the way to the Lyman limit) -- a real theta1=1.897 draw under that range, steeper than the steepest real curve ever measured, produced a ~99% flux discontinuity at dust.curve.VALIDITY_FLOOR_AA (found via visual verification of the blended composite). Uniform(0, 1.3) keeps a small margin above Prevot et al.'s own n~1.2 rather than treating it as a hard ceiling no real population could ever exceed.",
+    ),
+    NPEParameter(
+        name="quasar_continuum.host_disk_reddening.euv_curvature",
+        owner="quasar_continuum.host_disk_reddening",
+        tier=3,
+        physical=True,
+        distribution=Uniform(-2.0, 0.1),
+        units="unitless (curvature of ln(k) vs ln(lambda) below dust.curve.VALIDITY_FLOOR_AA, the Lyman limit)",
+        description="Controls how the host-disk reddening curve behaves in the EUV/X-ray (below ~912A), where no real dust-extinction measurement exists -- see dust.curve.k_lambda_with_floor. 0 continues the theta1_slope power law unbounded; negative values turn the curve over toward transparency at short wavelengths; positive values diverge faster.",
+        rationale="Genuinely MAGIC, drawn independently of torus_reddening's own euv_curvature (physically distinct dust, no reason to assume correlation) -- see that parameter's own rationale for the same 2026-09-13 PI direction this responds to.",
+    ),
+)
+# theta2 (UV bump) and theta3 (grey floor) are fixed at 0.0 here for this
+# first pass too -- UNLIKE torus_reddening, this is NOT because of a
+# bump-free physical finding (ordinary host ISM dust genuinely can show a
+# real 2175A bump, main:py/desisim/dust.py's own vary_bump_shape extension
+# exists for exactly this reason) -- it is a deliberate scope-narrowing
+# choice for this first pass, honestly flagged rather than silently
+# resolved: revisit if a specific host-disk channel need arises. See
+# host_disk_reddening.py.
+
+# =============================================================================
+# blending -- composes galaxy_continuum and quasar_continuum into one mock
+# (blending/continuum.py). quasar_frac is NOT a physical property of any
+# single real source (a real observed spectrum carries no ground-truth
+# quasar_frac label to condition on -- it is a quantity fit FROM a
+# spectrum, e.g. X-CIGALE's fracAGN, never supplied as one); it is a
+# dataset-construction/generation control, ensuring full user-dialable and
+# training-set coverage of the blend axis. physical=False accordingly.
+# =============================================================================
+_add(
+    NPEParameter(
+        name="blending.quasar_frac",
+        owner="blending",
+        tier=3,
+        physical=False,
+        distribution=Uniform(0.0, 1.0),
+        units="unitless (fraction of total BOLOMETRIC luminosity contributed by the quasar channel)",
+        description="Composite-mock blend control -- see blending/continuum.py's module docstring for the exact rescale mechanism (symmetric, total-luminosity-preserving; the achieved bolometric fraction equals this value exactly at every point in [0,1], not only at the edges).",
+        rationale="Uninformed Uniform(0,1) exists to give automated mock generation full coverage of the blend space, not to reflect any real observed AGN/host luminosity-fraction population distribution (which is itself a fitted, survey-selection-dependent quantity -- anchoring to one such survey's histogram would bias training coverage toward that survey's selection function).",
     ),
 )
 

@@ -83,15 +83,26 @@
     note = {Software provenance for quasar_continuum/comptonization.py: this project's Python translation of donthcomp.f (not distributed standalone by HEASARC -- it is a core XSPEC built-in) is a light cleanup of A.D. Thomas's independently-published translation of the same Fortran subroutine, written for this paper's OXAF model.},
 }
 
-@ARTICLE{UrryPadovani1995,
-    author = {{Urry}, C.~Megan and {Padovani}, Paolo},
-    title = "{Unified Schemes for Radio-Loud Active Galactic Nuclei}",
-    journal = {Publications of the Astronomical Society of the Pacific},
-    year = 1995,
-    volume = {107},
-    pages = {803},
-    doi = {10.1086/133630},
-    note = {AGN unification-scheme argument (type-1 selection restricts the viewing angle to within the torus opening half-angle) motivating this channel's cosi prior range.},
+@ARTICLE{Antonucci1993,
+    author = {{Antonucci}, Robert},
+    title = "{Unified Models for Active Galactic Nuclei and Quasars}",
+    journal = {Annual Review of Astronomy and Astrophysics},
+    year = 1993,
+    volume = {31},
+    pages = {473-521},
+    doi = {10.1146/annurev.aa.31.090193.002353},
+    note = {Foundational AGN unification argument: the torus/disc symmetry axis is isotropically oriented across the general AGN population, with type-1 vs. type-2 classification an emergent consequence of whether a given sightline happens to intercept the torus -- motivates this channel's isotropic cosi prior (2026-09-10, superseding an earlier type-1-selection-restricted range once torus reddening began modeling obscuration explicitly).},
+}
+
+@ARTICLE{Netzer2015,
+    author = {{Netzer}, Hagai},
+    title = "{Revisiting the Unified Model of Active Galactic Nuclei}",
+    journal = {Annual Review of Astronomy and Astrophysics},
+    year = 2015,
+    volume = {53},
+    pages = {365-408},
+    doi = {10.1146/annurev-astro-082214-122302},
+    note = {Modern update to the unification picture (torus origin/structure); cited alongside Antonucci (1993) for this channel's isotropic cosi prior.},
 }
 
 @ARTICLE{LussoRisaliti2017,
@@ -339,4 +350,64 @@
     volume = {689},
     pages = {A58},
     note = {DESI-targeted SBI spectral-inversion model using a Dense-Basis-based SFH parameterization; its Dirichlet(alpha=1) prior on per-bin sSFR fractions is the (not-identical, only inspirational) basis for this project's own quantile-gap Dirichlet prior default.},
+}
+
+% =============================================================================
+% demiurge.parameters.registry -- quasar_continuum.torus_reddening
+% =============================================================================
+@ARTICLE{EzhikodeEtAl2017,
+    author = {{Ezhikode}, Shubham Harit and {Gandhi}, Poshak and {Done}, Chris and {Ward}, Martin and {Dewangan}, Gulab~Chand and {Misra}, Ranjeev and {Philip}, N.~S.},
+    title = "{Determining the torus covering factors for a sample of type 1 AGN in the local Universe}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2017,
+    volume = {472},
+    pages = {3492-3511},
+    doi = {10.1093/mnras/stx2160},
+    note = {Mean torus covering factor f_c = 0.30 +/- 0.17 across 51 local type-1 AGN (IR/bolometric method) -- anchors quasar_continuum.torus_reddening.covering_angle_cosine's prior range.},
+}
+
+@ARTICLE{GaskellEtAl2004,
+    author = {{Gaskell}, C.~Martin and {Goosmann}, Ren{\'e}~W. and {Antonucci}, Robert~R.~J. and {Whysong}, David~H.},
+    title = "{The Nuclear Reddening Curve for Active Galactic Nuclei and the Shape of the Infrared to X-Ray Spectral Energy Distribution}",
+    journal = {The Astrophysical Journal},
+    year = 2004,
+    volume = {616},
+    pages = {147-156},
+    doi = {10.1086/423885},
+    note = {AGN nuclear reddening curves are significantly flatter in the UV than the local ISM/SMC, with no 2175A bump, and "very flat" for the least host-contaminated (radio-loud) sample -- motivates torus_reddening's bump-free, narrow-slope curve family and the separation from a distinct, steeper host-disk-local component.},
+}
+
+% =============================================================================
+% demiurge.parameters.registry -- quasar_continuum.host_disk_reddening
+% =============================================================================
+@ARTICLE{HopkinsEtAl2012,
+    author = {{Hopkins}, Philip~F. and {Hernquist}, Lars and {Hayward}, Christopher~C. and {Narayanan}, Desika},
+    title = "{Why are AGN and host galaxies misaligned?}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2012,
+    volume = {425},
+    pages = {1121-1128},
+    doi = {10.1111/j.1365-2966.2012.21449.x},
+    note = {The AGN/torus symmetry axis is not correlated with the host galaxy's own large-scale disk axis -- independent angular-momentum transport at very different physical scales, confirmed in hydrodynamic simulations -- justifies drawing quasar_continuum.host_disk_reddening.cosi_disk fully independently of quasar_continuum.agnsed.cosi.},
+}
+
+@ARTICLE{TuffsEtAl2004,
+    author = {{Tuffs}, R.~J. and {Popescu}, C.~C. and {V{\"o}lk}, H.~J. and {Kylafis}, N.~D. and {Dopita}, M.~A.},
+    title = "{Modelling the spectral energy distribution of galaxies. V. The dust and PAH emission SEDs of disk galaxies}",
+    journal = {Astronomy \& Astrophysics},
+    year = 2004,
+    volume = {419},
+    pages = {821-835},
+    doi = {10.1051/0004-6361:20035689},
+    note = {Ray-tracing radiative-transfer model of inclination-dependent dust attenuation in disk galaxies; cited qualitatively (saturating, non-divergent inclination dependence) for host_disk_reddening's capped secant path-length law -- not fit to their tabulated results.},
+}
+
+@ARTICLE{PrevotEtAl1984,
+    author = {{Prevot}, M.~L. and {Lequeux}, J. and {Maurice}, E. and {Prevot}, L. and {Rocca-Volmerange}, B.},
+    title = "{The typical interstellar extinction in the Small Magellanic Cloud}",
+    journal = {Astronomy \& Astrophysics},
+    year = 1984,
+    volume = {132},
+    pages = {389-392},
+    note = {The SMC bar extinction curve -- the steepest well-established Local Group extinction law -- has a measured far-UV power-law index of n~1.2; anchors host_disk_reddening.theta1_slope's registered ceiling (Uniform(0,1.3)) after an earlier, unchecked Uniform(0,2) (reused wholesale from main's general-reach convention) let a real draw steeper than any measured curve produce a ~99% flux discontinuity at the reddening curve's Lyman-limit validity floor.},
 }

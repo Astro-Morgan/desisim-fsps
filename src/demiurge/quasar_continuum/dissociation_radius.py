@@ -30,8 +30,8 @@ equator than the pole -- an inclination effect, present at any accretion
 rate) and (2) Wang, Qiu, Du & Ho (2014, ApJ 797, 65)'s slim-disc
 self-shadowing (at high Eddington ratio, the puffed-up inner disc advects
 energy inward rather than radiating it, so less power escapes at all,
-independent of viewing angle -- subsequently applied to observed torus
-size-luminosity relations by later reverberation-mapping studies). These are
+independent of viewing angle -- applied to observed torus size-luminosity
+data, 78 AGN, by Chen et al. 2023, MNRAS 522, 3439). These are
 genuinely different mechanisms, but (1) is NOT imported here:
 `continuum.py`'s AGNSED synthesis already applies
 `cosi_scale = cosi/0.5` (KD18's own Lambertian disc/warm geometry) to

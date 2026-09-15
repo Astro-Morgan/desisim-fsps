@@ -99,6 +99,39 @@ chemical evolution model exists \citep{YinShenHao2023} but requires
 machinery (a Kennicutt--Schmidt law, mass-loading-factor-parameterized
 outflows) well beyond this pass's scope.
 
+\subsubsection{Population inversion (SFH/Z generating-parameter grid)} \label{sec:population-inversion}
+
+Real literature (age, metallicity) targets for disc/halo/elliptical
+populations (Bensby, Feltzing \& Oey 2014; An et al. 2013; Xue et al. 2015;
+Gallazzi et al. 2005; Thomas, Maraston, Bender \& Mendes de Oliveira 2005 --
+pulled during planning, not yet wired into a query here, so not formally
+cited in this section) are direct [Fe/H]/[Z/H]/age observables, none of
+which map onto the $y$/$\epsilon$ closed-box parameterization above
+directly. \texttt{galaxy\_continuum.population\_inversion} solves this by
+inversion rather than by deriving a new formula: it builds a combined
+dense-grid + Monte-Carlo point cloud over the SFH/metallicity generating
+parameters (the quantile gap-fraction simplex -- parameterized via stick-
+breaking over an ordinary cube for simple regular gridding, rather than the
+raw 4-simplex -- plus the GP length-scale fraction, yield, and efficiency;
+$6$ free dimensions, `total\_stellar\_mass` excluded since it cancels out of
+both summaries below by construction), evaluates each point's resulting
+mass-weighted age and metallicity, and looks up the nearest points to a
+given target via a normalized-distance $k$-nearest-neighbor query -- a
+regular grid guarantees boundary coverage (including corners the priors
+rarely visit), Monte Carlo draws from the real registered priors supply
+resolution where probability mass concentrates.
+
+Two closed-form identities make the per-point evaluation cheap: integrating
+the usual age definition by parts using $F(0)=0,\,F(t_{\rm obs})=1$ gives
+mass-weighted age $= \int_0^{t_{\rm obs}} F(t)\,dt$ (no differentiation of
+$F(t)$ needed); mass-weighted metallicity is
+$\bar{Z} = \int Z(t)\,dF(t)$, computed directly as a trapezoidal integral
+of $Z$ against $F$ itself. A related, useful fact this relies on: since
+$F(t_{\rm obs})=1$ always, $Z(t_{\rm obs}) = y\ln(1/(1-\epsilon))$
+regardless of SFH shape -- only $\bar{Z}$ (which DOES depend on shape) is
+the physically relevant target for matching population-level literature
+metallicities.
+
 \subsubsection{Initial Mass Function} \label{sec:imf}
 The full theory of a time-varying, galaxy-wide stellar initial mass
 function (the Integrated Galaxy-wide IMF, IGIMF: \citealt{KroupaWeidner2003};

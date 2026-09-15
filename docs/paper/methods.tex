@@ -457,6 +457,57 @@ revisit if a specific need arises. Full parameter list in
 \texttt{src/demiurge/parameters/registry.py}
 (\texttt{quasar\_continuum.host\_disk\_reddening.*}).
 
+\subsection{AGN-proximity dust-sublimation radius}
+\label{sec:dissociation-radius}
+
+\texttt{quasar\_continuum.dissociation\_radius} computes the distance
+inside which the AGN's own radiation field is harsh enough to sublimate
+dust grains -- not yet consumed downstream (it feeds the not-yet-built
+CLOUDY-based ionization emulator's metallicity self-consistency
+treatment), registered ahead of that consumer per this project's usual
+scaffolding-ahead-of-content practice. \citet{Barvainis1987}'s classical
+radiative-equilibrium result,
+\begin{equation}
+    R_{\rm sub} = K \sqrt{L_{\rm UV} / 10^{46}\,{\rm erg\,s^{-1}}}\ \ [{\rm pc}],
+\end{equation}
+absorbs the dust sublimation temperature/grain-size dependence
+($(T_{\rm sub}/1500\,{\rm K})^{-2.8}(a/0.05\,\mu{\rm m})^{-0.5}$ in
+Barvainis's own formula) into a single prefactor $K$, drawn from
+$\mathrm{Uniform}(0.4, 1.3)\,{\rm pc}$ -- Barvainis's own quoted range
+across the grain assumptions his paper considers, genuine (if uncertain)
+grain physics rather than an invented bracket, hence Tier 2.
+
+The inclination ($\cos i$) dependence is deliberately NOT an imported
+empirical correction. Two independent, real mechanisms are documented in
+the literature for why observed sublimation/torus radii run shallower
+with luminosity than Barvainis's isotropic $L^{1/2}$ law predicts:
+anisotropic disc illumination (the disc radiates less toward the equator
+than the pole, present at any accretion rate; \citealt{KawaguchiMori2010,
+KawaguchiMori2011,MinezakiEtAl2019}) and slim-disc self-shadowing (at high
+Eddington ratio the puffed-up inner disc advects energy inward rather
+than radiating it, reducing escaping power independent of viewing angle;
+\citealt{WangEtAl2014}, subsequently applied to observed torus
+size-luminosity relations by later reverberation-mapping studies). The
+first mechanism is not imported here because
+\texttt{quasar\_continuum.continuum} already applies
+$\cos i_{\rm scale} = \cos i / 0.5$ (Section~\ref{sec:quasar-continuum}'s
+Lambertian disc/warm geometry) to the disc+warm luminosity before this
+module ever sees it -- bolting a population-averaged anisotropy
+correction on top of luminosity already reduced for the same physical
+reason would double-count the same effect. Instead, $L_{\rm UV}$ is
+computed directly from AGNSED's own already-cosi-scaled disc+warm
+photon-rate output (excluding the isotropic hot-corona/X-ray tail, which
+is not the optical/UV continuum that heats grains), so $R_{\rm sub}$
+inherits real angle-dependence through the same first-principles geometry
+this project already computes, with no separate fitted correction and no
+double-counting. The second mechanism (Eddington-ratio/self-shadowing) is
+a real, still-missing piece of physics -- no citable per-object formula
+was found in either source, only population-level slope shifts -- and is
+explicitly excluded from this pass, left as a documented simplification
+for a later improvement. Full parameter list in
+\texttt{src/demiurge/parameters/registry.py}
+(\texttt{quasar\_continuum.dissociation\_radius.*}).
+
 \section{Blending}
 \label{sec:blending}
 

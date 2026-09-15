@@ -411,6 +411,29 @@ _add(
 # host_disk_reddening.py.
 
 # =============================================================================
+# quasar_continuum.dissociation_radius -- AGN-proximity dust-sublimation
+# radius (Barvainis 1987, ApJ 320, 537), angle-coupled to AGNSED's own
+# existing cosi_scale rather than an imported empirical anisotropy
+# correction -- see dissociation_radius.py's module docstring for the full
+# double-counting rationale. Not yet consumed by anything (the CLOUDY
+# emulator this feeds doesn't exist yet) -- registered ahead of its
+# consumer per this project's own scaffolding-ahead-of-content convention.
+# =============================================================================
+_add(
+    NPEParameter(
+        name="quasar_continuum.dissociation_radius.sublimation_prefactor",
+        owner="quasar_continuum.dissociation_radius",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.4, 1.3),
+        units="pc (at L_UV = 1e46 erg/s)",
+        citation="Barvainis (1987, ApJ 320, 537) -- R_sub = prefactor * sqrt(L_UV/1e46 erg/s) pc, prefactor = 0.4-1.3 pc depending on assumed dust sublimation temperature (1500-2000K) and grain size, evaluated across the grain assumptions his own paper considers.",
+        description="Normalization prefactor in R_sub = prefactor * sqrt(L_UV/1e46 erg/s) -- absorbs Barvainis's own (T_sub/1500K)^-2.8 * (a/0.05um)^-0.5 grain-temperature/size dependence into a single draw rather than exposing two separately-degenerate free parameters.",
+        rationale="Real, citable range from Barvainis's own paper (not an invented bracket) reflecting genuine grain-physics uncertainty (which sublimation temperature/grain size actually applies), not measurement error on one true value -- Tier 2 rather than Tier 3 accordingly, same standard as this project's other real-quoted-range-treated-as-a-prior parameters (e.g. torus_reddening.covering_angle_cosine's Ezhikode et al. mean+/-1sigma range).",
+    ),
+)
+
+# =============================================================================
 # blending -- composes galaxy_continuum and quasar_continuum into one mock
 # (blending/continuum.py). quasar_frac is NOT a physical property of any
 # single real source (a real observed spectrum carries no ground-truth

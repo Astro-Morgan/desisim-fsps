@@ -423,3 +423,61 @@
     pages = {389-392},
     note = {The SMC bar extinction curve -- the steepest well-established Local Group extinction law -- has a measured far-UV power-law index of n~1.2; anchors host_disk_reddening.theta1_slope's registered ceiling (Uniform(0,1.3)) after an earlier, unchecked Uniform(0,2) (reused wholesale from main's general-reach convention) let a real draw steeper than any measured curve produce a ~99% flux discontinuity at the reddening curve's Lyman-limit validity floor.},
 }
+
+% =============================================================================
+% demiurge.parameters.registry -- quasar_continuum.dissociation_radius
+% =============================================================================
+@ARTICLE{Barvainis1987,
+    author = {{Barvainis}, R.},
+    title = "{Hot dust and the near-infrared bump in the continuum spectra of quasars and active galactic nuclei}",
+    journal = {The Astrophysical Journal},
+    year = 1987,
+    volume = {320},
+    pages = {537-544},
+    doi = {10.1086/165571},
+    note = {Dust in radiative equilibrium with the illuminating continuum, sublimating at a fixed grain temperature -- the foundational R_sub = prefactor*sqrt(L_UV/1e46 erg/s) formula quasar_continuum.dissociation_radius.sublimation_prefactor's Uniform(0.4, 1.3) pc range is drawn directly from, spanning the grain sublimation temperature/size assumptions the paper itself considers.},
+}
+
+@ARTICLE{KawaguchiMori2010,
+    author = {{Kawaguchi}, Toshihiro and {Mori}, Masao},
+    title = "{Orientation Effects on the Inner Region of Dusty Torus of Active Galactic Nuclei}",
+    journal = {The Astrophysical Journal Letters},
+    year = 2010,
+    volume = {724},
+    pages = {L183-L187},
+    doi = {10.1088/2041-8205/724/2/L183},
+    note = {Anisotropic disc illumination (shining less toward the equator than the pole) makes the real dust-sublimation radius smaller than an isotropic-illumination formula predicts -- the mechanism NOT independently re-imported here, since quasar_continuum.continuum already applies the same disc anisotropy (cosi_scale=cosi/0.5) before dissociation_radius.py ever sees the luminosity; see that module's docstring for the double-counting reasoning.},
+}
+
+@ARTICLE{KawaguchiMori2011,
+    author = {{Kawaguchi}, Toshihiro and {Mori}, Masao},
+    title = "{Near-Infrared Reverberation by Dusty Clumpy Tori in Active Galactic Nuclei}",
+    journal = {The Astrophysical Journal},
+    year = 2011,
+    volume = {737},
+    pages = {105},
+    doi = {10.1088/0004-637X/737/2/105},
+    note = {Follow-up to KawaguchiMori2010 modeling the IR reverberation response of a clumpy torus under anisotropic disc illumination and torus self-occultation -- same anisotropy mechanism, cited alongside the 2010 paper for completeness, not independently re-imported here (see KawaguchiMori2010's note).},
+}
+
+@ARTICLE{MinezakiEtAl2019,
+    author = {{Minezaki}, Takeo and {Yoshii}, Yuzuru and {Kobayashi}, Yukiyasu and {Enya}, Keigo and {Suganuma}, Masahiro and {Tomita}, Hiroyuki and {Aoki}, Tsutomu},
+    title = "{Reverberation Measurements of the Inner Radii of the Dust Tori in Quasars}",
+    journal = {The Astrophysical Journal},
+    year = 2019,
+    volume = {886},
+    pages = {150},
+    doi = {10.3847/1538-4357/ab4f7b},
+    note = {Empirically confirms a torus-radius-vs-luminosity slope (alpha=0.424) shallower than the isotropic Barvainis L^0.5 expectation, attributed to Kawaguchi & Mori's anisotropic-illumination mechanism -- not independently re-imported here (see KawaguchiMori2010's note for why).},
+}
+
+@ARTICLE{WangEtAl2014,
+    author = {{Wang}, Jian-Min and {Qiu}, Jie and {Du}, Pu and {Ho}, Luis~C.},
+    title = "{Self-shadowing Effects of Slim Accretion Disks in Active Galactic Nuclei: The Diverse Appearance of the Broad-line Region}",
+    journal = {The Astrophysical Journal},
+    year = 2014,
+    volume = {797},
+    pages = {65},
+    doi = {10.1088/0004-637X/797/1/65},
+    note = {At high Eddington ratio a slim disc's geometrically/optically thick inner region advects energy inward rather than radiating it, reducing escaping power independent of viewing angle -- a real, distinct (from disc-anisotropy) mechanism for why observed torus/BLR sizes run shallower with luminosity than a naive isotropic formula predicts. Explicitly NOT implemented in quasar_continuum.dissociation_radius this pass (no citable per-object formula found, only population-level slope shifts) -- documented as a known simplification/exclusion for a later improvement.},
+}

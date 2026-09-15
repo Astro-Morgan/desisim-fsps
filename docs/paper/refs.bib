@@ -472,6 +472,39 @@
     note = {Applies Wang et al. (2014)'s slim-disc self-shadowing theory to observed torus size-luminosity data (78 AGN), finding a shallower-than-Barvainis slope correlated with accretion rate -- explicitly NOT implemented in quasar_continuum.dissociation_radius this pass (no citable per-object formula extracted), documented as a known simplification/exclusion for a later improvement.},
 }
 
+@ARTICLE{GutkinEtAl2016,
+    author = {{Gutkin}, Julia and {Charlot}, St{\'e}phane and {Bruzual}, Gustavo},
+    title = "{Modelling the nebular emission from primeval to present-day star-forming galaxies}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2016,
+    volume = {462},
+    pages = {1757-1774},
+    doi = {10.1093/mnras/stw1716},
+    note = {Parameterizes gas-phase metal depletion onto dust with a single free dust-to-metal mass ratio xi_d in [0,1] (solar baseline xi_d,sun=0.36) -- their own Table 1 gives each refractory element's depletion factor AT xi_d=0.36, piecewise-linearly interpolated to (0,0) and (1,1) at the endpoints; non-refractory elements (N, He, Ne, S, Ar) have f_dpl=0 for every xi_d. Anchors dust.depletion.xi_d's Uniform(0,1) prior and the depletion_factor() mechanism itself.},
+}
+
+@ARTICLE{FeltreEtAl2016,
+    author = {{Feltre}, Anna and {Charlot}, St{\'e}phane and {Gutkin}, Julia},
+    title = "{Nuclear activity versus star formation: emission-line diagnostics at ultraviolet and optical wavelengths}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2016,
+    volume = {456},
+    pages = {3354},
+    doi = {10.1093/mnras/stv2794},
+    note = {The AGN narrow-line-region CLOUDY grid (built on GutkinEtAl2016's same depletion/xi_d mechanism) that beagle-agn (VidalGarciaEtAl2024) uses -- referenced here for where xi_d^NLR's underlying grid comes from, not independently cited for its own numbers.},
+}
+
+@ARTICLE{VidalGarciaEtAl2024,
+    author = {{Vidal-Garc{\'i}a}, Alba and {Plat}, Alexandre and {Curtis-Lake}, Emma and {Feltre}, Anna and {Hirschmann}, M{\'e}lanie and {Chevallard}, Jacopo and {Charlot}, St{\'e}phane},
+    title = "{BEAGLE-AGN I: simultaneous constraints on the properties of gas in star-forming and AGN narrow-line regions in galaxies}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2024,
+    volume = {527},
+    pages = {7217},
+    doi = {10.1093/mnras/stad3252},
+    note = {Extends GutkinEtAl2016's xi_d depletion mechanism to AGN NLR gas via xi_d^NLR (their Table 2: fixed at 0.3 in fiducial models; Table 3: explored Uniform(0.1,0.5) when fitting it, noting degeneracy with log U_s^NLR and Z_gas^NLR in their own line-ratio fitting) -- anchors dust.depletion.xi_d_nlr's TruncatedNormal(0.3, 0.1, [0,1]) prior. Correction: an earlier pass through this project's own planning misattributed this paper to "Katz et al." -- verified against the real paper 2026-09-15.},
+}
+
 @ARTICLE{MinezakiEtAl2019,
     author = {{Minezaki}, Takeo and {Yoshii}, Yuzuru and {Kobayashi}, Yukiyasu and {Enya}, Keigo and {Suganuma}, Masahiro and {Tomita}, Hiroyuki and {Aoki}, Tsutomu},
     title = "{Reverberation Measurements of the Inner Radii of the Dust Tori in Quasars}",

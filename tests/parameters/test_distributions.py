@@ -10,6 +10,7 @@ from demiurge.parameters.distributions import (
     MaxwellBoltzmann,
     Normal,
     Poisson,
+    TruncatedNormal,
     Uniform,
     ZeroInflated,
 )
@@ -177,4 +178,56 @@ def test_zero_inflated_reproducible_given_same_generator_state():
     dist = ZeroInflated(0.5, Uniform(0.0, 1.0))
     a = dist.draw(np.random.default_rng(11), size=500)
     b = dist.draw(np.random.default_rng(11), size=500)
+    np.testing.assert_array_equal(a, b)
+
+
+def test_truncated_normal_rejects_nonpositive_sigma():
+    with pytest.raises(ValueError):
+        TruncatedNormal(mean=0.3, sigma=0.0, low=0.0, high=1.0)
+
+
+def test_truncated_normal_rejects_low_ge_high():
+    with pytest.raises(ValueError):
+        TruncatedNormal(mean=0.3, sigma=0.1, low=1.0, high=1.0)
+
+
+def test_truncated_normal_scalar_draw_within_bounds():
+    dist = TruncatedNormal(mean=0.3, sigma=0.1, low=0.0, high=1.0)
+    for i in range(500):
+        x = dist.draw(np.random.default_rng(i))
+        assert 0.0 <= x <= 1.0
+
+
+def test_truncated_normal_vectorized_draw_within_bounds():
+    dist = TruncatedNormal(mean=0.3, sigma=0.1, low=0.0, high=1.0)
+    draws = dist.draw(np.random.default_rng(5), size=100_000)
+    assert draws.shape == (100_000,)
+    assert np.all((draws >= 0.0) & (draws <= 1.0))
+
+
+def test_truncated_normal_respects_a_tight_truncation_that_would_reject_most_draws():
+    """Forces many rejection rounds (mean/sigma far from the bounds) --
+    exercises the batch-reject-and-redraw loop, not just the common
+    barely-truncated case."""
+    dist = TruncatedNormal(mean=0.0, sigma=1.0, low=2.0, high=2.5)
+    draws = dist.draw(np.random.default_rng(6), size=2000)
+    assert np.all((draws >= 2.0) & (draws <= 2.5))
+
+
+def test_truncated_normal_mean_approaches_untruncated_mean_when_bounds_are_wide():
+    dist = TruncatedNormal(mean=0.3, sigma=0.1, low=-10.0, high=10.0)
+    draws = dist.draw(np.random.default_rng(7), size=200_000)
+    assert draws.mean() == pytest.approx(0.3, abs=0.01)
+    assert draws.std() == pytest.approx(0.1, abs=0.01)
+
+
+def test_truncated_normal_support():
+    dist = TruncatedNormal(mean=0.3, sigma=0.1, low=0.0, high=1.0)
+    assert dist.support == (0.0, 1.0)
+
+
+def test_truncated_normal_reproducible_given_same_generator_state():
+    dist = TruncatedNormal(mean=0.3, sigma=0.1, low=0.0, high=1.0)
+    a = dist.draw(np.random.default_rng(13), size=500)
+    b = dist.draw(np.random.default_rng(13), size=500)
     np.testing.assert_array_equal(a, b)

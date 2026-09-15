@@ -507,6 +507,43 @@ for a later improvement. Full parameter list in
 \texttt{src/demiurge/parameters/registry.py}
 (\texttt{quasar\_continuum.dissociation\_radius.*}).
 
+\subsection{Gas-phase metal depletion onto dust}
+\label{sec:depletion}
+
+\texttt{dust.depletion} ties gas-phase metal abundances to a volume
+element's own total (gas+dust) metal budget -- needed for the not-yet-built
+CLOUDY-based ionization emulator's metallicity self-consistency, registered
+ahead of that consumer. \citet{GutkinEtAl2016} parameterize depletion with a
+single free dust-to-metal mass ratio $\xi_d \in [0, 1]$ (solar baseline
+$\xi_{d,\odot}=0.36$): each REFRACTORY element's depletion factor
+$f_{\rm dpl}^i(\xi_d)$ is piecewise-linear through $(0,0)$, their own
+measured Table 1 value at $\xi_d=\xi_{d,\odot}$, and $(1,1)$ -- their own
+stated boundary condition. Non-refractory elements (nitrogen, the one this
+project currently registers; also He/Ne/S/Ar per their Table 1 footnote)
+have $f_{\rm dpl}^i=0$ for EVERY $\xi_d$, not interpolated at all -- an
+easy mistake this project's own implementation made once (nitrogen briefly
+ramped toward full depletion at high $\xi_d$, caught by a unit test and
+verified against the real paper text before fixing, not just patched to
+pass). $\xi_d \sim \mathrm{Uniform}(0, 1)$ for general gas; GCB16's own
+model grid samples only $0.1/0.3/0.5$ for tractability, not because other
+values are unphysical, so the full range is registered.
+
+The identical mechanism extends to AGN narrow-line-region gas via
+$\xi_d^{\rm NLR}$ \citep[built on][own AGN-NLR CLOUDY grid]{FeltreEtAl2016},
+drawn independently of general $\xi_d$ (physically distinct gas).
+\citet{VidalGarciaEtAl2024} fix $\xi_d^{\rm NLR}=0.3$ in their fiducial AGN
+models and explore $\mathrm{Uniform}(0.1, 0.5)$ when fitting it, noting a
+real degeneracy with $\log U_s^{\rm NLR}$ and $Z_{\rm gas}^{\rm NLR}$ in
+their own line-ratio fitting. Since both papers treat $0.3$ as the
+physically-preferred value rather than an arbitrary grid midpoint,
+$\xi_d^{\rm NLR} \sim \mathrm{TruncatedNormal}(0.3, 0.1, [0,1])$ is
+registered instead of a flat Uniform -- centered on that value, with their
+own explored range at roughly $\pm 2\sigma$; their degeneracy caveat comes
+from INVERSE line-ratio fitting, which may not transfer to this project's
+forward generation from priors (noted, not yet resolved). Full parameter
+list in \texttt{src/demiurge/parameters/registry.py}
+(\texttt{dust.depletion.*}).
+
 \section{Blending}
 \label{sec:blending}
 

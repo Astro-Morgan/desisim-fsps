@@ -42,8 +42,13 @@ TARGETS = {
 
 def main() -> None:
     rng = np.random.default_rng(0)
-    print("Building the population target grid (6D, n_grid_points_per_axis=6, n_monte_carlo=5000)...")
-    grid = build_population_target_grid(rng=rng, n_grid_points_per_axis=6, n_monte_carlo=5000)
+    target_z_values = [Z_SUN_ASPLUND2009 * 10.0 ** spec["feh"] for spec in TARGETS.values()]
+    print("Building the population target grid (6D, n_grid_points_per_axis=6, n_monte_carlo=5000, "
+          "supplemented with targeted samples around each of the 3 targets below)...")
+    grid = build_population_target_grid(
+        rng=rng, n_grid_points_per_axis=6, n_monte_carlo=5000,
+        target_z_values=target_z_values, n_yield_efficiency_points_per_target=50, n_shape_draws_per_target_point=20,
+    )
     print(f"Grid built: {len(grid)} points "
           f"(age range {grid.mass_weighted_age_gyr.min():.2f}-{grid.mass_weighted_age_gyr.max():.2f} Gyr, "
           f"Z range {grid.mass_weighted_z.min():.2e}-{grid.mass_weighted_z.max():.2e})")

@@ -126,11 +126,41 @@ the usual age definition by parts using $F(0)=0,\,F(t_{\rm obs})=1$ gives
 mass-weighted age $= \int_0^{t_{\rm obs}} F(t)\,dt$ (no differentiation of
 $F(t)$ needed); mass-weighted metallicity is
 $\bar{Z} = \int Z(t)\,dF(t)$, computed directly as a trapezoidal integral
-of $Z$ against $F$ itself. A related, useful fact this relies on: since
-$F(t_{\rm obs})=1$ always, $Z(t_{\rm obs}) = y\ln(1/(1-\epsilon))$
-regardless of SFH shape -- only $\bar{Z}$ (which DOES depend on shape) is
-the physically relevant target for matching population-level literature
-metallicities.
+of $Z$ against $F$ itself. A real bug this module shipped with once (caught
+by a unit test landing $\sim$2x off, not within noise, before being trusted):
+$Z(t_{\rm obs}) = y\ln(1/(1-\epsilon))$ (the metallicity of only the LAST
+gas enriched, exact since $F(t_{\rm obs})=1$ always) was wrongly assumed to
+approximate $\bar{Z}$ (the mass-weighted average over ALL gas, the actually
+relevant quantity for matching population-level literature targets) --
+these are genuinely different numbers. $\bar{Z}$ in fact has its OWN exact,
+SFH-shape-independent closed form: substituting $u=F(t)$ in
+$\int Z(t)\,dF(t)$ leaves a definite integral in $u$ alone (since
+$Z(t)=y\ln(1/(1-\epsilon F(t)))$ depends on $F(t)$ only), evaluating to
+\begin{equation}
+    \bar{Z} = y \left[1 + \frac{1-\epsilon}{\epsilon}\ln(1-\epsilon)\right],
+\end{equation}
+verified numerically against the real (shape-dependent machinery)
+`evaluate\_population` to $\sim 10^{-4}$ relative precision.
+
+This closed form for $\bar{Z}$ enables targeted sampling
+(`build\_targeted\_samples`, `sample\_yield\_efficiency\_for\_target\_z`):
+draw $\epsilon$ from its real registered prior, solve for the $y$ that
+lands exactly on a target $\bar{Z}$, keep only draws whose implied $y$
+falls within $y$'s registered support. Motivation, verified numerically
+(2026-09-16): plain grid+Monte-Carlo sampling of $(y, \epsilon)$ induces a
+$\bar{Z}$-distribution that is genuinely $\sim$2.6x sparser near a real
+low-$\bar{Z}$ (halo-like) target than a real moderate-$\bar{Z}$
+(elliptical-like) one at the same tolerance (out of $2\times10^6$ draws
+from the real registered priors) -- a structural consequence of $\bar{Z}$
+being a multiplicative function of two independently-distributed factors
+(the level set near $\bar{Z}\to0$ occupies a genuinely smaller corner of
+the $(y,\epsilon)$ rectangle than the level set near its upper reach), not
+an artifact of this module's own sampling choices. Targeted sampling
+directly fills whichever region is sparse rather than relying on more
+blind draws eventually landing nearby. One honest limitation: the SFH-shape
+draws paired with each targeted $(y,\epsilon)$ point still come from the
+unconditional shape prior, so matching a target's AGE within the targeted
+set is still down to luck, not yet similarly targeted.
 
 \subsubsection{Initial Mass Function} \label{sec:imf}
 The full theory of a time-varying, galaxy-wide stellar initial mass

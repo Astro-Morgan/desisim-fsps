@@ -5,7 +5,10 @@ from demiurge.galaxy_continuum.metallicity import evaluate_closed_box
 from demiurge.galaxy_continuum.population_inversion import (
     PopulationTargetGrid,
     build_population_target_grid,
+    build_targeted_samples,
     evaluate_population,
+    mass_weighted_z_closed_form,
+    sample_yield_efficiency_for_target_z,
     stick_breaking_gap_fractions,
 )
 from demiurge.galaxy_continuum.sfh import reconstruct_cumulative_sfh
@@ -185,3 +188,92 @@ def test_build_population_target_grid_reproducible_given_same_seed():
     b = build_population_target_grid(rng=np.random.default_rng(42), t_obs_gyr=T_OBS, n_grid_points_per_axis=2, n_monte_carlo=10)
     np.testing.assert_array_equal(a.mass_weighted_age_gyr, b.mass_weighted_age_gyr)
     np.testing.assert_array_equal(a.mass_weighted_z, b.mass_weighted_z)
+
+
+# ---- mass_weighted_z_closed_form ----
+
+
+def test_mass_weighted_z_closed_form_matches_numeric_evaluate_population():
+    """The identity this module's targeted-sampling relies on: substituting
+    u=F(t) in integral Z(t) dF(t) makes mass_weighted_z a definite integral
+    in u alone, hence SFH-shape-independent -- verified numerically against
+    the real (shape-dependent machinery) evaluate_population, not just
+    derived on paper. A real bug here (using Z(t_obs) instead) was caught
+    by this exact kind of check landing off by ~2x, not within noise."""
+    rng = np.random.default_rng(11)
+    for _ in range(30):
+        yield_ = 10.0 ** rng.uniform(-3, -1.3)
+        efficiency = rng.uniform(0.01, 0.99)
+        gap_fractions = rng.dirichlet([2.0, 2.0, 2.0, 2.0])
+        length_scale_fraction = rng.uniform(0.05, 0.5)
+        summary = evaluate_population(gap_fractions, length_scale_fraction, yield_, efficiency, t_obs_gyr=T_OBS)
+        closed_form = mass_weighted_z_closed_form(yield_, efficiency)
+        assert summary.mass_weighted_z == pytest.approx(closed_form, rel=1e-3)
+
+
+# ---- targeted sampling for sparse Z regions ----
+
+
+def test_sample_yield_efficiency_hits_target_z_exactly():
+    target_z = 2.5e-4
+    yields, efficiencies = sample_yield_efficiency_for_target_z(target_z, np.random.default_rng(0), n_points=30)
+    implied_z = mass_weighted_z_closed_form(yields, efficiencies)
+    np.testing.assert_allclose(implied_z, target_z, rtol=1e-9)
+
+
+def test_sample_yield_efficiency_respects_registered_yield_support():
+    from demiurge.parameters.registry import get_parameter
+
+    yield_low, yield_high = get_parameter("galaxy_continuum.metallicity.yield").distribution.support
+    yields, _ = sample_yield_efficiency_for_target_z(2.5e-4, np.random.default_rng(1), n_points=30)
+    assert np.all((yields >= yield_low) & (yields <= yield_high))
+
+
+def test_sample_yield_efficiency_raises_for_unachievable_target():
+    with pytest.raises(ValueError):
+        sample_yield_efficiency_for_target_z(1.0, np.random.default_rng(2), n_points=10, max_attempts=1000)
+
+
+def test_build_targeted_samples_lands_close_to_target_z():
+    target_z = 2.5e-4
+    extra = build_targeted_samples(
+        target_z, rng=np.random.default_rng(3), t_obs_gyr=T_OBS, n_yield_efficiency_points=10, n_shape_draws_per_point=5
+    )
+    n = 10 * 5
+    for key in ("gap_fractions", "gp_length_scale_fraction", "yield_", "star_formation_efficiency", "mass_weighted_age_gyr", "mass_weighted_z"):
+        assert key in extra
+    assert extra["mass_weighted_z"].shape == (n,)
+    # evaluate_population's own numeric mass_weighted_z should match the exact closed-form target tightly --
+    # the only residual is GP-reconstruction discretization noise (~1e-3 level), not shape-dependence.
+    np.testing.assert_allclose(extra["mass_weighted_z"], target_z, rtol=1e-2)
+
+
+def test_targeted_samples_measurably_improve_density_near_a_sparse_target():
+    """The actual point of this feature: supplementing a sparse-target
+    query with build_targeted_samples should shrink the achieved Z error
+    dramatically compared to the base grid+MC cloud alone."""
+    target_age, target_z = 12.0, 2.5252e-4  # halo-like
+
+    base = build_population_target_grid(rng=np.random.default_rng(4), t_obs_gyr=T_OBS, n_grid_points_per_axis=3, n_monte_carlo=500)
+    idx_base = base.nearest(target_age, target_z, k=30)
+    base_z_error = np.abs(base.mass_weighted_z[idx_base] - target_z).mean()
+
+    extra = build_targeted_samples(
+        target_z, rng=np.random.default_rng(5), t_obs_gyr=T_OBS, n_yield_efficiency_points=10, n_shape_draws_per_point=10
+    )
+    supplemented = base.concatenate(extra)
+    idx_supp = supplemented.nearest(target_age, target_z, k=30)
+    supplemented_z_error = np.abs(supplemented.mass_weighted_z[idx_supp] - target_z).mean()
+
+    assert supplemented_z_error < base_z_error
+
+
+def test_build_population_target_grid_with_target_z_values_concatenates_extra_points():
+    grid_without = build_population_target_grid(
+        rng=np.random.default_rng(6), t_obs_gyr=T_OBS, n_grid_points_per_axis=2, n_monte_carlo=10
+    )
+    grid_with = build_population_target_grid(
+        rng=np.random.default_rng(6), t_obs_gyr=T_OBS, n_grid_points_per_axis=2, n_monte_carlo=10,
+        target_z_values=[2.5e-4], n_yield_efficiency_points_per_target=5, n_shape_draws_per_target_point=4,
+    )
+    assert len(grid_with) == len(grid_without) + 5 * 4

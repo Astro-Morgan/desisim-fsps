@@ -186,6 +186,16 @@ _add(
         description="Efficiency epsilon setting the closed-box gas reservoir size (M_gas,initial = total_stellar_mass / epsilon), via mu(t) = 1 - epsilon * F(t).",
         rationale="Bounded (0,1) by the closed-box construction itself; the specific prior shape (uniform) is not fit to real gas-fraction observations. MAGIC.",
     ),
+    NPEParameter(
+        name="galaxy_continuum.metallicity.yield_scatter",
+        owner="galaxy_continuum.metallicity",
+        tier=3,
+        physical=True,
+        distribution=Normal(0.0, 1.0),
+        units="unitless (standard-normal offset, not a metallicity or yield itself)",
+        description="Per-mock offset applied to the metallicity-dependent effective yield curve (metal_yield.yield_mean(Z)) as yield_mean(Z) * (1 + yield_sigma_relative(Z) * yield_scatter) -- represents which real nucleosynthesis/fallback-prescription history this mock's population actually follows, fixed for the whole enrichment history, not re-randomized per timestep. Not yet wired into the default generation path -- see metal_yield.py's module docstring.",
+        rationale="Standard-normal shape lets metal_yield.py carry the actual physical width (yield_sigma_relative(Z), coverage-dependent -- 35% inside Limongi & Chieffi (2018)'s real [Fe/H] in [-3,0] tabulated range, 70% outside it, grounded in the real cross-methodology spread found even at the best-anchored solar point: this project's own computed canonical yield (0.0098) vs. Kobayashi, Karakas & Lugaro (2020)'s independent value (~0.015) differ by ~53%) rather than needing a separately-registered width per regime.",
+    ),
 )
 
 # =============================================================================

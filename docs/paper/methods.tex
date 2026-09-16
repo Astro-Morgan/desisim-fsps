@@ -186,16 +186,108 @@ $\alpha_1^{\rm canonical}=1.3$, $\alpha_2^{\rm canonical}=2.3$
 code of \texttt{galIMF} \citep{YanJerabkovaKroupa2017,
 YanJerabkovaKroupaVazdekis2019}, the public reference implementation of the
 IGIMF framework, rather than inferred from the papers' text alone. The
-high-mass slope $\alpha_3$ is held fixed at its canonical value (2.3)
-regardless of $Z$ or SFR in this implementation -- the SFR-driven,
-cluster-mass-function-integration-dependent behavior IGIMF theory predicts
-is not captured. A fuller physical treatment, deriving the IMF's
-characteristic mass from gas thermodynamics (dust-gas coupling, metal-line
-cooling, radiative feedback) rather than an empirical SFR/$Z$ scaling
-\citep{ShardaKrumholz2022}, and potentially incorporating AGN radiative
-feedback as an additional regulating mechanism (no literature precedent
-identified for the latter -- would be a genuine extension of this project's
-own, not a citation), is deferred future work.
+high-mass slope $\alpha_3$ -- the one that actually controls how many
+massive, metal-producing stars form -- is ALSO now metallicity-dependent
+(added 2026-09-16, PI direction), via \citet{RecchiEtAl2014} eq. 6 ("mild"
+model, galIMF's own \texttt{'R14'} option, independently confirmed against
+galIMF's source):
+\begin{equation}
+    \alpha_3(Z) = \alpha_3^{\rm canonical} + 0.0572\,[{\rm Fe/H}],
+\end{equation}
+a genuine metallicity-ONLY simplification of \citet{MarksEtAl2012}'s full
+density+metallicity joint relation, obtained by fixing the embedded-cluster
+density at a constant fiducial value inside it -- avoiding the cluster-
+mass-function integration this project still does not implement. The
+SFR-driven term of the full IGIMF relation remains uncaptured (still a real
+gap, now smaller than before). A fuller physical treatment, deriving the
+IMF's characteristic mass from gas thermodynamics (dust-gas coupling,
+metal-line cooling, radiative feedback) rather than an empirical SFR/$Z$
+scaling \citep{ShardaKrumholz2022}, and potentially incorporating AGN
+radiative feedback as an additional regulating mechanism (no literature
+precedent identified for the latter -- would be a genuine extension of this
+project's own, not a citation), remains deferred future work.
+
+\subsubsection{Self-consistent metallicity-dependent chemical yield} \label{sec:metal-yield}
+
+Closes a real gap identified by Andy (2026-09-16): a top-heavier IMF at low
+$Z$ should mean more massive, metal-producing stars form per unit mass
+formed, hence a higher effective chemical yield -- previously the dynamic-
+IMF mode (Section~\ref{sec:imf}) and the closed-box enrichment model
+(Section~\ref{sec:metallicity}) shared $Z(t)$ as an input/output with no
+actual feedback between them. \texttt{galaxy\_continuum.metal\_yield}
+derives a real $\mathrm{yield}(Z)$ from actual core-collapse supernova
+nucleosynthesis data (\citealt{LimongiChieffi2018}, VizieR/CDS
+J/ApJS/237/13, downloaded and parsed directly -- chosen specifically
+because it is structurally the same kind of per-progenitor-mass isotopic
+yield table as \citet{WooseleyWeaver1995} (which \citealt{RecchiKroupa2015}
+itself uses for its own closely related calculation, but which proved
+impossible to extract cleanly from an OCR'd scan), making it the most
+consistent available substitute) integrated against the Kroupa IMF with
+$\alpha_{1,2,3}(Z)$ above.
+
+\textbf{Validation}: at the canonical (untouched Kroupa 2001) IMF using the
+solar-metallicity table, the computed effective yield (0.0098) matches
+\citet{RecchiKroupa2015}'s own stated "typical" canonical-IMF value (0.01,
+their invariant-IMF comparison) to within 2\%, and is the same order of
+magnitude as \citet{KobayashiEtAl2020}'s independently-computed IMF-
+integrated yield (their Table 3, $\sim$0.015) via a completely different
+table and methodology. Using each real metallicity's OWN matching L\&C18
+table (not the solar table reused everywhere -- an earlier, less complete
+pass through this calculation used only the solar table and overstated the
+resulting low-$Z$ yield boost) together with $\alpha_{1,2,3}(Z)$ gives four
+real, self-consistent $([{\rm Fe/H}], \mathrm{yield})$ anchors spanning
+$[{\rm Fe/H}]=0$ to $-3$: yield rises smoothly from 0.0098 to 0.0149 (a
+real $\sim$1.5x increase; a lower-metallicity star's own weaker winds/
+different pre-SN structure partially counteracts, but does not cancel, the
+IMF-driven boost).
+
+\textbf{Central curve and spread}: a monotone cubic Hermite spline
+(hand-rolled Fritsch--Carlson/PCHIP algorithm -- no \texttt{scipy}, per this
+project's NumPy-only hard dependency) through the 4 real anchors, held flat
+outside $[{\rm Fe/H}]\in[-3,0]$ (the same "hold flat beyond the table's own
+coverage" convention already used in
+Sections~\ref{sec:dissociation-radius}/\ref{sec:population-inversion}, not
+a new rule). The registered scatter,
+\texttt{galaxy\_continuum.metallicity.yield\_scatter} $\sim
+\mathcal{N}(0,1)$, is drawn once per mock and applied as
+$\mathrm{yield}(Z)\cdot(1+\sigma_{\rm rel}(Z)\cdot\mathrm{yield\_scatter})$,
+floored at 5\% of the mean to keep the ODE below well-posed. Per PI
+direction, $\sigma_{\rm rel}(Z)$ reflects genuinely different confidence by
+region: 35\% inside L\&C18's real tabulated coverage (grounded in the real
+cross-methodology spread found even at the best-anchored solar point --
+this project's own 0.0098 vs. \citeauthor{KobayashiEtAl2020}'s $\sim$0.015
+differ by $\sim$53\%), 70\% outside it (pure extrapolation, no real
+per-mass data at all).
+
+\textbf{The self-consistency ODE}: $Z(t)$ no longer has a closed form once
+yield depends on the evolving $Z(t)$ itself.
+\citet{RecchiKroupa2015} solve the general (SFR-and-$Z$-dependent) version
+of this problem, but it is genuinely implicit there (their own words:
+"this system of equations is indeed implicit... an implicit procedure must
+be employed") because their SFR and $Z$ depend on each other circularly.
+This project's IMF treatment has no SFR-dependence at all (a pre-existing,
+documented scope limit, not added for this feature) -- dropping that term
+removes the circularity entirely, leaving a plain initial-value ODE,
+\begin{equation}
+    \frac{dZ}{d\mu} = -\frac{\mathrm{yield}_{\rm eff}(Z)}{\mu}, \qquad Z(\mu{=}1)=0,
+\end{equation}
+integrated forward via a hand-rolled RK4 stepper (again, no \texttt{scipy})
+over the same $\mu(t)$ grid Section~\ref{sec:sfh} already produces.
+Verified to reproduce the OLD closed-box relation $Z=y_0\ln(1/\mu)$ exactly
+for a synthetic constant-yield right-hand side, isolated from the real
+(genuinely Z-varying) $\mathrm{yield}(Z)$ curve, before being trusted.
+
+\textbf{Deliberately NOT wired into the default generation path}
+(Section~\ref{sec:metallicity}'s \texttt{draw\_metallicity}, or
+Section~\ref{sec:population-inversion}'s inversion grid) -- that
+section's own \texttt{mass\_weighted\_z\_closed\_form} (and the whole
+targeted-sampling mechanism built on it) relies on $Z(t)$ having a closed
+form independent of SFH shape, true for the OLD constant-yield relation
+but not true once yield depends on the evolving $Z(t)$ itself. Wiring this
+in as the default would mean reworking those closed-form shortcuts into
+numerical ones -- a real, separate integration decision, not made in this
+pass. Full parameter list in \texttt{src/demiurge/parameters/registry.py}
+(\texttt{galaxy\_continuum.metallicity.yield\_scatter}).
 
 \subsubsection{Spectral Synthesis}
 Given SFR($t$), $Z(t)$, and (in the ``dynamic'' IMF mode) $\alpha_{1,2}(Z(t))$

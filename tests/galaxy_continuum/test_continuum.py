@@ -72,8 +72,12 @@ def test_from_arrays_dynamic_imf_mode_varies_with_bin_metallicity():
     gc = GalaxyContinuum.from_arrays(t, sfr, z, imf_mode="dynamic", backend="fsps_direct", n_bins=2)
     slopes = [b["imf_slopes"] for b in gc.meta["bins"]]
     assert len(set(slopes)) > 1, "dynamic mode should not produce identical slopes across differing-Z bins"
-    for s in slopes:
-        assert s.imf3 == canonical_slopes().imf3, "alpha3 must stay fixed in this simplified pass"
+    # alpha3 is now ALSO metallicity-dependent (Recchi et al. 2014 "R14", added
+    # 2026-09-16) -- a lower-Z bin must give a smaller (more top-heavy) alpha3
+    # than a higher-Z bin, not a fixed canonical value across every bin.
+    imf3_values = [s.imf3 for s in slopes]
+    assert len(set(imf3_values)) > 1, "alpha3 should now vary with bin metallicity too"
+    assert imf3_values == sorted(imf3_values), "alpha3 should increase monotonically with the bins' rising Z"
 
 
 def test_from_arrays_rejects_invalid_imf_mode():

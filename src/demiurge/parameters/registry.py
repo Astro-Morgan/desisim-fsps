@@ -55,7 +55,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .distributions import Dirichlet, Distribution, LogNormal, LogUniform, Normal, Uniform, ZeroInflated
+from .distributions import (
+    Dirichlet,
+    Distribution,
+    LogNormal,
+    LogUniform,
+    Normal,
+    TruncatedNormal,
+    Uniform,
+    ZeroInflated,
+)
 
 
 @dataclass(frozen=True)
@@ -176,6 +185,16 @@ _add(
         units="unitless (fraction of the initial gas reservoir ultimately locked into stars by t_obs)",
         description="Efficiency epsilon setting the closed-box gas reservoir size (M_gas,initial = total_stellar_mass / epsilon), via mu(t) = 1 - epsilon * F(t).",
         rationale="Bounded (0,1) by the closed-box construction itself; the specific prior shape (uniform) is not fit to real gas-fraction observations. MAGIC.",
+    ),
+    NPEParameter(
+        name="galaxy_continuum.metallicity.yield_scatter",
+        owner="galaxy_continuum.metallicity",
+        tier=3,
+        physical=True,
+        distribution=Normal(0.0, 1.0),
+        units="unitless (standard-normal offset, not a metallicity or yield itself)",
+        description="Per-mock offset applied to the metallicity-dependent effective yield curve (metal_yield.yield_mean(Z)) as yield_mean(Z) * (1 + yield_sigma_relative(Z) * yield_scatter) -- represents which real nucleosynthesis/fallback-prescription history this mock's population actually follows, fixed for the whole enrichment history, not re-randomized per timestep. Not yet wired into the default generation path -- see metal_yield.py's module docstring.",
+        rationale="Standard-normal shape lets metal_yield.py carry the actual physical width (yield_sigma_relative(Z), coverage-dependent -- 35% inside Limongi & Chieffi (2018)'s real [Fe/H] in [-3,0] tabulated range, 70% outside it, grounded in the real cross-methodology spread found even at the best-anchored solar point: this project's own computed canonical yield (0.0098) vs. Kobayashi, Karakas & Lugaro (2020)'s independent value (~0.015) differ by ~53%) rather than needing a separately-registered width per regime.",
     ),
 )
 
@@ -409,6 +428,61 @@ _add(
 # choice for this first pass, honestly flagged rather than silently
 # resolved: revisit if a specific host-disk channel need arises. See
 # host_disk_reddening.py.
+
+# =============================================================================
+# quasar_continuum.dissociation_radius -- AGN-proximity dust-sublimation
+# radius (Barvainis 1987, ApJ 320, 537), angle-coupled to AGNSED's own
+# existing cosi_scale rather than an imported empirical anisotropy
+# correction -- see dissociation_radius.py's module docstring for the full
+# double-counting rationale. Not yet consumed by anything (the CLOUDY
+# emulator this feeds doesn't exist yet) -- registered ahead of its
+# consumer per this project's own scaffolding-ahead-of-content convention.
+# =============================================================================
+_add(
+    NPEParameter(
+        name="quasar_continuum.dissociation_radius.sublimation_prefactor",
+        owner="quasar_continuum.dissociation_radius",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.4, 1.3),
+        units="pc (at L_UV = 1e46 erg/s)",
+        citation="Barvainis (1987, ApJ 320, 537) -- R_sub = prefactor * sqrt(L_UV/1e46 erg/s) pc, prefactor = 0.4-1.3 pc depending on assumed dust sublimation temperature (1500-2000K) and grain size, evaluated across the grain assumptions his own paper considers.",
+        description="Normalization prefactor in R_sub = prefactor * sqrt(L_UV/1e46 erg/s) -- absorbs Barvainis's own (T_sub/1500K)^-2.8 * (a/0.05um)^-0.5 grain-temperature/size dependence into a single draw rather than exposing two separately-degenerate free parameters.",
+        rationale="Real, citable range from Barvainis's own paper (not an invented bracket) reflecting genuine grain-physics uncertainty (which sublimation temperature/grain size actually applies), not measurement error on one true value -- Tier 2 rather than Tier 3 accordingly, same standard as this project's other real-quoted-range-treated-as-a-prior parameters (e.g. torus_reddening.covering_angle_cosine's Ezhikode et al. mean+/-1sigma range).",
+    ),
+)
+
+# =============================================================================
+# dust.depletion -- gas-phase metal depletion onto dust grains (Gutkin,
+# Charlot & Bruzual 2016, MNRAS 462, 1757), shared by any gas the ionization
+# emulator will eventually illuminate (galaxy HII regions AND AGN NLR) -- see
+# dust/depletion.py's module docstring for the full mechanism. Not yet
+# consumed by anything (the CLOUDY emulator this feeds doesn't exist yet).
+# =============================================================================
+_add(
+    NPEParameter(
+        name="dust.depletion.xi_d",
+        owner="dust.depletion",
+        tier=2,
+        physical=True,
+        distribution=Uniform(0.0, 1.0),
+        units="unitless (dust-to-metal mass ratio, 0=no depletion, 1=fully depleted)",
+        citation="Gutkin, Charlot & Bruzual (2016, MNRAS 462, 1757) -- ties every element's gas-phase depletion to this single free ratio via a piecewise-linear rule anchored on their own measured Table 1 values at the solar baseline xi_d,sun=0.36.",
+        description="Dust-to-metal mass ratio for general (non-AGN-NLR) gas -- see dust/depletion.py's depletion_factor()/gas_phase_fraction().",
+        rationale="Full Uniform(0,1) rather than a narrower range: GCB16's own paper samples only 0.1/0.3/0.5 in their model grid for computational tractability, not because other values are unphysical -- xi_d is bounded [0,1] by its own definition (fraction of metals in the solid phase), so no additional narrowing is citable.",
+    ),
+    NPEParameter(
+        name="dust.depletion.xi_d_nlr",
+        owner="dust.depletion",
+        tier=2,
+        physical=True,
+        distribution=TruncatedNormal(mean=0.3, sigma=0.1, low=0.0, high=1.0),
+        units="unitless (dust-to-metal mass ratio, AGN narrow-line-region gas)",
+        citation="Vidal-Garcia, Plat, Curtis-Lake, Feltre, Hirschmann, Chevallard & Charlot (2024, MNRAS 527, 7217, 'beagle-agn I') -- fixes xi_d^NLR=0.3 in their fiducial AGN-NLR models (their Table 2) and explores Uniform(0.1, 0.5) when fitting it (Table 3), noting it is degenerate with log U_s^NLR and Z_gas^NLR in their own line-ratio fitting.",
+        description="Dust-to-metal mass ratio for AGN narrow-line-region gas -- same mechanism as dust.depletion.xi_d, its own independent draw (physically distinct gas, no reason to assume correlation).",
+        rationale="TruncatedNormal(0.3, 0.1, [0,1]) rather than a flat Uniform(0,1): both source papers treat 0.3 as the physically-preferred working value (their own fixed default, not an arbitrary grid midpoint), so a mildly-informative prior centered there is more honest than discarding that information -- sigma=0.1 puts their own explored range (0.1-0.5) at roughly +/-2sigma. Their own 'poorly constrained' caveat comes from INVERSE line-ratio fitting (degenerate with log U); this project draws forward from priors rather than fitting xi_d^NLR from data, so that specific degeneracy concern may not transfer -- noted, not resolved, pending an actual check once this parameter has a real consumer.",
+    ),
+)
 
 # =============================================================================
 # blending -- composes galaxy_continuum and quasar_continuum into one mock

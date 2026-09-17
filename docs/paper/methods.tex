@@ -99,6 +99,103 @@ chemical evolution model exists \citep{YinShenHao2023} but requires
 machinery (a Kennicutt--Schmidt law, mass-loading-factor-parameterized
 outflows) well beyond this pass's scope.
 
+\subsubsection{Population inversion (SFH/Z generating-parameter grid)} \label{sec:population-inversion}
+
+Real literature (age, metallicity) targets for disc/halo/elliptical
+populations (Bensby, Feltzing \& Oey 2014; An et al. 2013; Xue et al. 2015;
+Gallazzi et al. 2005; Thomas, Maraston, Bender \& Mendes de Oliveira 2005 --
+pulled during planning, not yet wired into a query here, so not formally
+cited in this section) are direct [Fe/H]/[Z/H]/age observables, none of
+which map onto the $y$/$\epsilon$ closed-box parameterization above
+directly. \texttt{galaxy\_continuum.population\_inversion} solves this by
+inversion rather than by deriving a new formula: it builds a combined
+dense-grid + Monte-Carlo point cloud over the SFH/metallicity generating
+parameters (the quantile gap-fraction simplex -- parameterized via stick-
+breaking over an ordinary cube for simple regular gridding, rather than the
+raw 4-simplex -- plus the GP length-scale fraction, yield, and efficiency;
+$6$ free dimensions, `total\_stellar\_mass` excluded since it cancels out of
+both summaries below by construction), evaluates each point's resulting
+mass-weighted age and metallicity, and looks up the nearest points to a
+given target via a normalized-distance $k$-nearest-neighbor query -- a
+regular grid guarantees boundary coverage (including corners the priors
+rarely visit), Monte Carlo draws from the real registered priors supply
+resolution where probability mass concentrates.
+
+Two closed-form identities make the per-point evaluation cheap: integrating
+the usual age definition by parts using $F(0)=0,\,F(t_{\rm obs})=1$ gives
+mass-weighted age $= \int_0^{t_{\rm obs}} F(t)\,dt$ (no differentiation of
+$F(t)$ needed); mass-weighted metallicity is
+$\bar{Z} = \int Z(t)\,dF(t)$, computed directly as a trapezoidal integral
+of $Z$ against $F$ itself. A real bug this module shipped with once (caught
+by a unit test landing $\sim$2x off, not within noise, before being trusted):
+$Z(t_{\rm obs}) = y\ln(1/(1-\epsilon))$ (the metallicity of only the LAST
+gas enriched, exact since $F(t_{\rm obs})=1$ always) was wrongly assumed to
+approximate $\bar{Z}$ (the mass-weighted average over ALL gas, the actually
+relevant quantity for matching population-level literature targets) --
+these are genuinely different numbers. $\bar{Z}$ in fact has its OWN exact,
+SFH-shape-independent closed form: substituting $u=F(t)$ in
+$\int Z(t)\,dF(t)$ leaves a definite integral in $u$ alone (since
+$Z(t)=y\ln(1/(1-\epsilon F(t)))$ depends on $F(t)$ only), evaluating to
+\begin{equation}
+    \bar{Z} = y \left[1 + \frac{1-\epsilon}{\epsilon}\ln(1-\epsilon)\right],
+\end{equation}
+verified numerically against the real (shape-dependent machinery)
+`evaluate\_population` to $\sim 10^{-4}$ relative precision.
+
+This closed form for $\bar{Z}$ enables targeted sampling
+(`build\_targeted\_samples`, `sample\_yield\_efficiency\_for\_target\_z`):
+draw $\epsilon$ from its real registered prior, solve for the $y$ that
+lands exactly on a target $\bar{Z}$, keep only draws whose implied $y$
+falls within $y$'s registered support. Motivation, verified numerically
+(2026-09-16): plain grid+Monte-Carlo sampling of $(y, \epsilon)$ induces a
+$\bar{Z}$-distribution that is genuinely $\sim$2.6x sparser near a real
+low-$\bar{Z}$ (halo-like) target than a real moderate-$\bar{Z}$
+(elliptical-like) one at the same tolerance (out of $2\times10^6$ draws
+from the real registered priors) -- a structural consequence of $\bar{Z}$
+being a multiplicative function of two independently-distributed factors
+(the level set near $\bar{Z}\to0$ occupies a genuinely smaller corner of
+the $(y,\epsilon)$ rectangle than the level set near its upper reach), not
+an artifact of this module's own sampling choices. Targeted sampling
+directly fills whichever region is sparse rather than relying on more
+blind draws eventually landing nearby. One honest limitation: the SFH-shape
+draws paired with each targeted $(y,\epsilon)$ point still come from the
+unconditional shape prior, so matching a target's AGE within the targeted
+set is still down to luck, not yet similarly targeted.
+
+\paragraph{Self-consistent extension (2026-09-17).} Andy's stated
+preference, once Section~\ref{sec:metal-yield}'s metallicity-dependent
+yield existed: use it here instead of the constant-yield closed form
+above. \texttt{evaluate\_population\_self\_consistent}/
+\texttt{build\_self\_consistent\_targeted\_samples}/
+\texttt{build\_self\_consistent\_population\_target\_grid} are
+the same idea, with two real problems this surfaced and fixed. First,
+$\bar{Z}$ has no closed form once yield depends on the evolving $Z(t)$
+itself, so the exact-targeting trick above becomes numerical bisection
+over \texttt{yield\_scatter} instead of algebra -- monotonic in its effect on
+$\bar{Z}$, so bisection converges reliably. Second, the self-consistent
+evaluation measured $\sim$300x slower per call than the closed form
+(RK4-stepping through the enrichment history vs. one formula, $\sim$53ms
+vs. $\sim$0.17ms) -- addressed by a coarser step grid (30 steps instead
+of 200; checked directly, $<$5\% deviation, negligible next to the
+35--70\% astrophysical scatter Section~\ref{sec:metal-yield} already
+models) and by vectorizing the RK4 stepper across many points' bisection
+trials at once instead of one Python-level call per point -- together,
+$\sim$100x faster, confirmed by direct benchmark. AGE-targeting was also
+added (an improvement over the closed-box version's "down to luck"
+limitation): a large, cheap candidate pool (checking a shape's age needs
+no ODE integration, only the SFH reconstruction) is kept to whichever
+points are CLOSEST to the target age, rather than accepted within a fixed
+window (which inherits any local asymmetry in the shape prior's own age
+distribution) -- verified directly on the three representative literature
+targets (thin disc, halo, massive elliptical): metallicity lands within
+$<$1\% of target in every case, age within $\lesssim$1 Gyr, with the pool
+size growing automatically for genuinely rare target ages (checked on the
+12~Gyr halo case: closing the age bias from $-0.47$ to $-0.01$~Gyr needed
+growing the pool from 4,000 to 60,000 candidates, still under 10 seconds).
+Reachability is checked BEFORE nearest-in-age selection, not after --
+checking in the other order under-fills the requested batch size
+unpredictably.
+
 \subsubsection{Initial Mass Function} \label{sec:imf}
 The full theory of a time-varying, galaxy-wide stellar initial mass
 function (the Integrated Galaxy-wide IMF, IGIMF: \citealt{KroupaWeidner2003};
@@ -123,16 +220,108 @@ $\alpha_1^{\rm canonical}=1.3$, $\alpha_2^{\rm canonical}=2.3$
 code of \texttt{galIMF} \citep{YanJerabkovaKroupa2017,
 YanJerabkovaKroupaVazdekis2019}, the public reference implementation of the
 IGIMF framework, rather than inferred from the papers' text alone. The
-high-mass slope $\alpha_3$ is held fixed at its canonical value (2.3)
-regardless of $Z$ or SFR in this implementation -- the SFR-driven,
-cluster-mass-function-integration-dependent behavior IGIMF theory predicts
-is not captured. A fuller physical treatment, deriving the IMF's
-characteristic mass from gas thermodynamics (dust-gas coupling, metal-line
-cooling, radiative feedback) rather than an empirical SFR/$Z$ scaling
-\citep{ShardaKrumholz2022}, and potentially incorporating AGN radiative
-feedback as an additional regulating mechanism (no literature precedent
-identified for the latter -- would be a genuine extension of this project's
-own, not a citation), is deferred future work.
+high-mass slope $\alpha_3$ -- the one that actually controls how many
+massive, metal-producing stars form -- is ALSO now metallicity-dependent
+(added 2026-09-16, PI direction), via \citet{RecchiEtAl2014} eq. 6 ("mild"
+model, galIMF's own \texttt{'R14'} option, independently confirmed against
+galIMF's source):
+\begin{equation}
+    \alpha_3(Z) = \alpha_3^{\rm canonical} + 0.0572\,[{\rm Fe/H}],
+\end{equation}
+a genuine metallicity-ONLY simplification of \citet{MarksEtAl2012}'s full
+density+metallicity joint relation, obtained by fixing the embedded-cluster
+density at a constant fiducial value inside it -- avoiding the cluster-
+mass-function integration this project still does not implement. The
+SFR-driven term of the full IGIMF relation remains uncaptured (still a real
+gap, now smaller than before). A fuller physical treatment, deriving the
+IMF's characteristic mass from gas thermodynamics (dust-gas coupling,
+metal-line cooling, radiative feedback) rather than an empirical SFR/$Z$
+scaling \citep{ShardaKrumholz2022}, and potentially incorporating AGN
+radiative feedback as an additional regulating mechanism (no literature
+precedent identified for the latter -- would be a genuine extension of this
+project's own, not a citation), remains deferred future work.
+
+\subsubsection{Self-consistent metallicity-dependent chemical yield} \label{sec:metal-yield}
+
+Closes a real gap identified by Andy (2026-09-16): a top-heavier IMF at low
+$Z$ should mean more massive, metal-producing stars form per unit mass
+formed, hence a higher effective chemical yield -- previously the dynamic-
+IMF mode (Section~\ref{sec:imf}) and the closed-box enrichment model
+(Section~\ref{sec:metallicity}) shared $Z(t)$ as an input/output with no
+actual feedback between them. \texttt{galaxy\_continuum.metal\_yield}
+derives a real $\mathrm{yield}(Z)$ from actual core-collapse supernova
+nucleosynthesis data (\citealt{LimongiChieffi2018}, VizieR/CDS
+J/ApJS/237/13, downloaded and parsed directly -- chosen specifically
+because it is structurally the same kind of per-progenitor-mass isotopic
+yield table as \citet{WooseleyWeaver1995} (which \citealt{RecchiKroupa2015}
+itself uses for its own closely related calculation, but which proved
+impossible to extract cleanly from an OCR'd scan), making it the most
+consistent available substitute) integrated against the Kroupa IMF with
+$\alpha_{1,2,3}(Z)$ above.
+
+\textbf{Validation}: at the canonical (untouched Kroupa 2001) IMF using the
+solar-metallicity table, the computed effective yield (0.0098) matches
+\citet{RecchiKroupa2015}'s own stated "typical" canonical-IMF value (0.01,
+their invariant-IMF comparison) to within 2\%, and is the same order of
+magnitude as \citet{KobayashiEtAl2020}'s independently-computed IMF-
+integrated yield (their Table 3, $\sim$0.015) via a completely different
+table and methodology. Using each real metallicity's OWN matching L\&C18
+table (not the solar table reused everywhere -- an earlier, less complete
+pass through this calculation used only the solar table and overstated the
+resulting low-$Z$ yield boost) together with $\alpha_{1,2,3}(Z)$ gives four
+real, self-consistent $([{\rm Fe/H}], \mathrm{yield})$ anchors spanning
+$[{\rm Fe/H}]=0$ to $-3$: yield rises smoothly from 0.0098 to 0.0149 (a
+real $\sim$1.5x increase; a lower-metallicity star's own weaker winds/
+different pre-SN structure partially counteracts, but does not cancel, the
+IMF-driven boost).
+
+\textbf{Central curve and spread}: a monotone cubic Hermite spline
+(hand-rolled Fritsch--Carlson/PCHIP algorithm -- no \texttt{scipy}, per this
+project's NumPy-only hard dependency) through the 4 real anchors, held flat
+outside $[{\rm Fe/H}]\in[-3,0]$ (the same "hold flat beyond the table's own
+coverage" convention already used in
+Sections~\ref{sec:dissociation-radius}/\ref{sec:population-inversion}, not
+a new rule). The registered scatter,
+\texttt{galaxy\_continuum.metallicity.yield\_scatter} $\sim
+\mathcal{N}(0,1)$, is drawn once per mock and applied as
+$\mathrm{yield}(Z)\cdot(1+\sigma_{\rm rel}(Z)\cdot\mathrm{yield\_scatter})$,
+floored at 5\% of the mean to keep the ODE below well-posed. Per PI
+direction, $\sigma_{\rm rel}(Z)$ reflects genuinely different confidence by
+region: 35\% inside L\&C18's real tabulated coverage (grounded in the real
+cross-methodology spread found even at the best-anchored solar point --
+this project's own 0.0098 vs. \citeauthor{KobayashiEtAl2020}'s $\sim$0.015
+differ by $\sim$53\%), 70\% outside it (pure extrapolation, no real
+per-mass data at all).
+
+\textbf{The self-consistency ODE}: $Z(t)$ no longer has a closed form once
+yield depends on the evolving $Z(t)$ itself.
+\citet{RecchiKroupa2015} solve the general (SFR-and-$Z$-dependent) version
+of this problem, but it is genuinely implicit there (their own words:
+"this system of equations is indeed implicit... an implicit procedure must
+be employed") because their SFR and $Z$ depend on each other circularly.
+This project's IMF treatment has no SFR-dependence at all (a pre-existing,
+documented scope limit, not added for this feature) -- dropping that term
+removes the circularity entirely, leaving a plain initial-value ODE,
+\begin{equation}
+    \frac{dZ}{d\mu} = -\frac{\mathrm{yield}_{\rm eff}(Z)}{\mu}, \qquad Z(\mu{=}1)=0,
+\end{equation}
+integrated forward via a hand-rolled RK4 stepper (again, no \texttt{scipy})
+over the same $\mu(t)$ grid Section~\ref{sec:sfh} already produces.
+Verified to reproduce the OLD closed-box relation $Z=y_0\ln(1/\mu)$ exactly
+for a synthetic constant-yield right-hand side, isolated from the real
+(genuinely Z-varying) $\mathrm{yield}(Z)$ curve, before being trusted.
+
+\textbf{Deliberately NOT wired into the default generation path}
+(Section~\ref{sec:metallicity}'s \texttt{draw\_metallicity}, or
+Section~\ref{sec:population-inversion}'s inversion grid) -- that
+section's own \texttt{mass\_weighted\_z\_closed\_form} (and the whole
+targeted-sampling mechanism built on it) relies on $Z(t)$ having a closed
+form independent of SFH shape, true for the OLD constant-yield relation
+but not true once yield depends on the evolving $Z(t)$ itself. Wiring this
+in as the default would mean reworking those closed-form shortcuts into
+numerical ones -- a real, separate integration decision, not made in this
+pass. Full parameter list in \texttt{src/demiurge/parameters/registry.py}
+(\texttt{galaxy\_continuum.metallicity.yield\_scatter}).
 
 \subsubsection{Spectral Synthesis}
 Given SFR($t$), $Z(t)$, and (in the ``dynamic'' IMF mode) $\alpha_{1,2}(Z(t))$
@@ -456,6 +645,93 @@ finding (ordinary ISM dust genuinely can show a real 2175\,\AA\ bump);
 revisit if a specific need arises. Full parameter list in
 \texttt{src/demiurge/parameters/registry.py}
 (\texttt{quasar\_continuum.host\_disk\_reddening.*}).
+
+\subsection{AGN-proximity dust-sublimation radius}
+\label{sec:dissociation-radius}
+
+\texttt{quasar\_continuum.dissociation\_radius} computes the distance
+inside which the AGN's own radiation field is harsh enough to sublimate
+dust grains -- not yet consumed downstream (it feeds the not-yet-built
+CLOUDY-based ionization emulator's metallicity self-consistency
+treatment), registered ahead of that consumer per this project's usual
+scaffolding-ahead-of-content practice. \citet{Barvainis1987}'s classical
+radiative-equilibrium result,
+\begin{equation}
+    R_{\rm sub} = K \sqrt{L_{\rm UV} / 10^{46}\,{\rm erg\,s^{-1}}}\ \ [{\rm pc}],
+\end{equation}
+absorbs the dust sublimation temperature/grain-size dependence
+($(T_{\rm sub}/1500\,{\rm K})^{-2.8}(a/0.05\,\mu{\rm m})^{-0.5}$ in
+Barvainis's own formula) into a single prefactor $K$, drawn from
+$\mathrm{Uniform}(0.4, 1.3)\,{\rm pc}$ -- Barvainis's own quoted range
+across the grain assumptions his paper considers, genuine (if uncertain)
+grain physics rather than an invented bracket, hence Tier 2.
+
+The inclination ($\cos i$) dependence is deliberately NOT an imported
+empirical correction. Two independent, real mechanisms are documented in
+the literature for why observed sublimation/torus radii run shallower
+with luminosity than Barvainis's isotropic $L^{1/2}$ law predicts:
+anisotropic disc illumination (the disc radiates less toward the equator
+than the pole, present at any accretion rate; \citealt{KawaguchiMori2010,
+KawaguchiMori2011,MinezakiEtAl2019}) and slim-disc self-shadowing (at high
+Eddington ratio the puffed-up inner disc advects energy inward rather
+than radiating it, reducing escaping power independent of viewing angle;
+\citealt{WangEtAl2014}, applied to observed torus size-luminosity data by
+\citealt{ChenEtAl2023}). The first mechanism is not imported here because
+\texttt{quasar\_continuum.continuum} already applies
+$\cos i_{\rm scale} = \cos i / 0.5$ (Section~\ref{sec:quasar-continuum}'s
+Lambertian disc/warm geometry) to the disc+warm luminosity before this
+module ever sees it -- bolting a population-averaged anisotropy
+correction on top of luminosity already reduced for the same physical
+reason would double-count the same effect. Instead, $L_{\rm UV}$ is
+computed directly from AGNSED's own already-cosi-scaled disc+warm
+photon-rate output (excluding the isotropic hot-corona/X-ray tail, which
+is not the optical/UV continuum that heats grains), so $R_{\rm sub}$
+inherits real angle-dependence through the same first-principles geometry
+this project already computes, with no separate fitted correction and no
+double-counting. The second mechanism (Eddington-ratio/self-shadowing) is
+a real, still-missing piece of physics -- no citable per-object formula
+was found in either source, only population-level slope shifts -- and is
+explicitly excluded from this pass, left as a documented simplification
+for a later improvement. Full parameter list in
+\texttt{src/demiurge/parameters/registry.py}
+(\texttt{quasar\_continuum.dissociation\_radius.*}).
+
+\subsection{Gas-phase metal depletion onto dust}
+\label{sec:depletion}
+
+\texttt{dust.depletion} ties gas-phase metal abundances to a volume
+element's own total (gas+dust) metal budget -- needed for the not-yet-built
+CLOUDY-based ionization emulator's metallicity self-consistency, registered
+ahead of that consumer. \citet{GutkinEtAl2016} parameterize depletion with a
+single free dust-to-metal mass ratio $\xi_d \in [0, 1]$ (solar baseline
+$\xi_{d,\odot}=0.36$): each REFRACTORY element's depletion factor
+$f_{\rm dpl}^i(\xi_d)$ is piecewise-linear through $(0,0)$, their own
+measured Table 1 value at $\xi_d=\xi_{d,\odot}$, and $(1,1)$ -- their own
+stated boundary condition. Non-refractory elements (nitrogen, the one this
+project currently registers; also He/Ne/S/Ar per their Table 1 footnote)
+have $f_{\rm dpl}^i=0$ for EVERY $\xi_d$, not interpolated at all -- an
+easy mistake this project's own implementation made once (nitrogen briefly
+ramped toward full depletion at high $\xi_d$, caught by a unit test and
+verified against the real paper text before fixing, not just patched to
+pass). $\xi_d \sim \mathrm{Uniform}(0, 1)$ for general gas; GCB16's own
+model grid samples only $0.1/0.3/0.5$ for tractability, not because other
+values are unphysical, so the full range is registered.
+
+The identical mechanism extends to AGN narrow-line-region gas via
+$\xi_d^{\rm NLR}$ \citep[built on][own AGN-NLR CLOUDY grid]{FeltreEtAl2016},
+drawn independently of general $\xi_d$ (physically distinct gas).
+\citet{VidalGarciaEtAl2024} fix $\xi_d^{\rm NLR}=0.3$ in their fiducial AGN
+models and explore $\mathrm{Uniform}(0.1, 0.5)$ when fitting it, noting a
+real degeneracy with $\log U_s^{\rm NLR}$ and $Z_{\rm gas}^{\rm NLR}$ in
+their own line-ratio fitting. Since both papers treat $0.3$ as the
+physically-preferred value rather than an arbitrary grid midpoint,
+$\xi_d^{\rm NLR} \sim \mathrm{TruncatedNormal}(0.3, 0.1, [0,1])$ is
+registered instead of a flat Uniform -- centered on that value, with their
+own explored range at roughly $\pm 2\sigma$; their degeneracy caveat comes
+from INVERSE line-ratio fitting, which may not transfer to this project's
+forward generation from priors (noted, not yet resolved). Full parameter
+list in \texttt{src/demiurge/parameters/registry.py}
+(\texttt{dust.depletion.*}).
 
 \section{Blending}
 \label{sec:blending}

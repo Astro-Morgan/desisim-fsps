@@ -306,6 +306,74 @@
     note = {Companion galIMF paper (chemical-evolution application) -- cited alongside YanJerabkovaKroupa2017 as the reference implementation's own citation pair.},
 }
 
+@ARTICLE{MarksEtAl2012,
+    author = {{Marks}, M. and {Kroupa}, P. and {Dabringhausen}, J. and {Pawlowski}, M.~S.},
+    title = "{Evidence for top-heavy stellar initial mass functions with increasing density and decreasing metallicity}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2012,
+    volume = {422},
+    pages = {2246-2254},
+    doi = {10.1111/j.1365-2966.2012.20767.x},
+    note = {The full density+metallicity-dependent IGIMF high-mass slope (alpha3) relation -- galIMF's own eq. 6-9 -- that Recchi et al. (2014) simplify to a metallicity-only form by fixing the embedded-cluster density; not directly used here (its own full form needs the embedded-cluster-density machinery this project still doesn't implement), cited for provenance.},
+}
+
+@ARTICLE{RecchiEtAl2014,
+    author = {{Recchi}, S. and {Calura}, F. and {Gibson}, B.~K. and {Kroupa}, P.},
+    title = "{[alpha/Fe] ratios of very metal-poor stars within the integrated galactic initial mass function theory}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2014,
+    volume = {437},
+    pages = {994-1004},
+    doi = {10.1093/mnras/stt1971},
+    note = {Their eq. 6 ("mild" model), alpha3(Z) = 2.3 + 0.0572*[Fe/H] -- a genuine metallicity-ONLY simplification of Marks et al. (2012)'s joint density+metallicity relation, fixing the embedded-cluster density at a constant fiducial value. Independently confirmed as galIMF's own 'R14' alpha3-model option. Directly implemented in galaxy_continuum.imf.metallicity_dependent_slopes.},
+}
+
+@ARTICLE{RecchiKroupa2015,
+    author = {{Recchi}, S. and {Kroupa}, P.},
+    title = "{The chemical evolution of galaxies within the IGIMF theory: the [alpha/Fe] ratios and downsizing}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2015,
+    volume = {446},
+    pages = {4168-4176},
+    doi = {10.1093/mnras/stu2338},
+    note = {Full numerical galactic chemical evolution model coupling a metallicity- AND SFR-dependent galaxy-wide IMF directly into the enrichment/yield calculation -- genuinely implicit (their own words: "this system of equations is indeed implicit... an implicit procedure must be employed") because SFR and Z depend on each other circularly there. This project's IMF has no SFR-dependence (a pre-existing scope limit, not added for this feature), which removes that circularity entirely, reducing the coupling to a plain initial-value ODE (metal_yield.py). Their own stated "typical" canonical-IMF yield value, y_Z=0.01, is this project's primary validation target -- metal_yield.py's own canonical-IMF calculation (0.0098) matches it to within 2%.},
+}
+
+@ARTICLE{KobayashiEtAl2020,
+    author = {{Kobayashi}, Chiaki and {Karakas}, Amanda~I. and {Lugaro}, Maria},
+    title = "{The Origin of Elements from Carbon to Uranium}",
+    journal = {The Astrophysical Journal},
+    year = 2020,
+    volume = {900},
+    pages = {179},
+    doi = {10.3847/1538-4357/abae65},
+    note = {Their Table 3 gives an independently-computed IMF-integrated (Kroupa-type IMF) core-collapse yield, y(Z=0.02)~0.015 (range 0.006-0.019 across model variants) -- a real, independent cross-check for metal_yield.py's own canonical-IMF result (0.0098), same order of magnitude via a completely different yield table/methodology than RecchiKroupa2015's own value.},
+}
+
+@ARTICLE{LimongiChieffi2018,
+    author = {{Limongi}, Marco and {Chieffi}, Alessandro},
+    title = "{Presupernova Evolution and Explosive Nucleosynthesis of Rotating Massive Stars in the Metallicity Range -3 <= [Fe/H] <= 0}",
+    journal = {The Astrophysical Journal Supplement Series},
+    year = 2018,
+    volume = {237},
+    pages = {13},
+    doi = {10.3847/1538-4365/aacb24},
+    note = {The real per-progenitor-mass (13-120 Msun) isotopic core-collapse yield data metal_yield.py actually integrates (VizieR/CDS J/ApJS/237/13, table8.dat, downloaded and parsed directly, non-rotating v=0 case, at their own real [Fe/H]=0/-1/-2/-3 grid) -- used specifically because it is structurally the same kind of table as Woosley & Weaver (1995) (which RecchiKroupa2015 itself uses but which proved impossible to extract cleanly from an OCR'd scan), making it the most consistent available substitute for the treatment already in place.},
+}
+
+@ARTICLE{WooseleyWeaver1995,
+    author = {{Woosley}, S.~E. and {Weaver}, Thomas~A.},
+    title = "{The Evolution and Explosion of Massive Stars. II. Explosive Hydrodynamics and Nucleosynthesis}",
+    journal = {The Astrophysical Journal Supplement Series},
+    year = 1995,
+    month = nov,
+    volume = {101},
+    pages = {181},
+    doi = {10.1086/192237},
+    adsurl = {https://ui.adsabs.harvard.edu/abs/1995ApJS..101..181W},
+    note = {The per-progenitor-mass isotopic yield table RecchiKroupa2015 itself uses for its own IGIMF yield calculation -- referenced here for provenance/consistency; this project's own metal_yield.py uses LimongiChieffi2018 instead, a structurally equivalent modern table, after this one proved impossible to extract cleanly from an OCR'd scan of the original scanned ApJS pages (no arXiv mirror exists for this pre-arXiv-era paper). DOI confirmed 2026-09-16 via the real ADS record (Andy supplied it directly) -- the earlier guess in this same session had turned out right, but was correctly left unstated pending that confirmation rather than asserted on a guess.},
+}
+
 @ARTICLE{ShardaKrumholz2022,
     author = {{Sharda}, Piyush and {Krumholz}, Mark R.},
     title = "{When did the initial mass function become bottom-heavy?}",
@@ -422,4 +490,107 @@
     volume = {132},
     pages = {389-392},
     note = {The SMC bar extinction curve -- the steepest well-established Local Group extinction law -- has a measured far-UV power-law index of n~1.2; anchors host_disk_reddening.theta1_slope's registered ceiling (Uniform(0,1.3)) after an earlier, unchecked Uniform(0,2) (reused wholesale from main's general-reach convention) let a real draw steeper than any measured curve produce a ~99% flux discontinuity at the reddening curve's Lyman-limit validity floor.},
+}
+
+% =============================================================================
+% demiurge.parameters.registry -- quasar_continuum.dissociation_radius
+% =============================================================================
+@ARTICLE{Barvainis1987,
+    author = {{Barvainis}, R.},
+    title = "{Hot dust and the near-infrared bump in the continuum spectra of quasars and active galactic nuclei}",
+    journal = {The Astrophysical Journal},
+    year = 1987,
+    volume = {320},
+    pages = {537-544},
+    doi = {10.1086/165571},
+    note = {Dust in radiative equilibrium with the illuminating continuum, sublimating at a fixed grain temperature -- the foundational R_sub = prefactor*sqrt(L_UV/1e46 erg/s) formula quasar_continuum.dissociation_radius.sublimation_prefactor's Uniform(0.4, 1.3) pc range is drawn directly from, spanning the grain sublimation temperature/size assumptions the paper itself considers.},
+}
+
+@ARTICLE{KawaguchiMori2010,
+    author = {{Kawaguchi}, Toshihiro and {Mori}, Masao},
+    title = "{Orientation Effects on the Inner Region of Dusty Torus of Active Galactic Nuclei}",
+    journal = {The Astrophysical Journal Letters},
+    year = 2010,
+    volume = {724},
+    pages = {L183-L187},
+    doi = {10.1088/2041-8205/724/2/L183},
+    note = {Anisotropic disc illumination (shining less toward the equator than the pole) makes the real dust-sublimation radius smaller than an isotropic-illumination formula predicts -- the mechanism NOT independently re-imported here, since quasar_continuum.continuum already applies the same disc anisotropy (cosi_scale=cosi/0.5) before dissociation_radius.py ever sees the luminosity; see that module's docstring for the double-counting reasoning.},
+}
+
+@ARTICLE{KawaguchiMori2011,
+    author = {{Kawaguchi}, Toshihiro and {Mori}, Masao},
+    title = "{Near-Infrared Reverberation by Dusty Clumpy Tori in Active Galactic Nuclei}",
+    journal = {The Astrophysical Journal},
+    year = 2011,
+    volume = {737},
+    pages = {105},
+    doi = {10.1088/0004-637X/737/2/105},
+    note = {Follow-up to KawaguchiMori2010 modeling the IR reverberation response of a clumpy torus under anisotropic disc illumination and torus self-occultation -- same anisotropy mechanism, cited alongside the 2010 paper for completeness, not independently re-imported here (see KawaguchiMori2010's note).},
+}
+
+@ARTICLE{ChenEtAl2023,
+    author = {{Chen}, Yong-Jie and {Liu}, Jun-Rong and {Zhai}, Shuo and {Yao}, Zhu-Heng and {Li}, Yan-Rong and {Du}, Pu and {Hu}, Chen and {Guo}, Wei-Jian and {Xiao}, Ming and {Songsheng}, Yu-Yang and {Wang}, Jian-Min},
+    title = "{Mid-infrared dusty torus sizes in active galactic nuclei with H{\ensuremath{\beta}} reverberation mapping}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2023,
+    volume = {522},
+    number = {3},
+    pages = {3439-3457},
+    doi = {10.1093/mnras/stad1136},
+    note = {Applies Wang et al. (2014)'s slim-disc self-shadowing theory to observed torus size-luminosity data (78 AGN), finding a shallower-than-Barvainis slope correlated with accretion rate -- explicitly NOT implemented in quasar_continuum.dissociation_radius this pass (no citable per-object formula extracted), documented as a known simplification/exclusion for a later improvement.},
+}
+
+@ARTICLE{GutkinEtAl2016,
+    author = {{Gutkin}, Julia and {Charlot}, St{\'e}phane and {Bruzual}, Gustavo},
+    title = "{Modelling the nebular emission from primeval to present-day star-forming galaxies}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2016,
+    volume = {462},
+    pages = {1757-1774},
+    doi = {10.1093/mnras/stw1716},
+    note = {Parameterizes gas-phase metal depletion onto dust with a single free dust-to-metal mass ratio xi_d in [0,1] (solar baseline xi_d,sun=0.36) -- their own Table 1 gives each refractory element's depletion factor AT xi_d=0.36, piecewise-linearly interpolated to (0,0) and (1,1) at the endpoints; non-refractory elements (N, He, Ne, S, Ar) have f_dpl=0 for every xi_d. Anchors dust.depletion.xi_d's Uniform(0,1) prior and the depletion_factor() mechanism itself.},
+}
+
+@ARTICLE{FeltreEtAl2016,
+    author = {{Feltre}, Anna and {Charlot}, St{\'e}phane and {Gutkin}, Julia},
+    title = "{Nuclear activity versus star formation: emission-line diagnostics at ultraviolet and optical wavelengths}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2016,
+    volume = {456},
+    pages = {3354},
+    doi = {10.1093/mnras/stv2794},
+    note = {The AGN narrow-line-region CLOUDY grid (built on GutkinEtAl2016's same depletion/xi_d mechanism) that beagle-agn (VidalGarciaEtAl2024) uses -- referenced here for where xi_d^NLR's underlying grid comes from, not independently cited for its own numbers.},
+}
+
+@ARTICLE{VidalGarciaEtAl2024,
+    author = {{Vidal-Garc{\'i}a}, Alba and {Plat}, Alexandre and {Curtis-Lake}, Emma and {Feltre}, Anna and {Hirschmann}, M{\'e}lanie and {Chevallard}, Jacopo and {Charlot}, St{\'e}phane},
+    title = "{BEAGLE-AGN I: simultaneous constraints on the properties of gas in star-forming and AGN narrow-line regions in galaxies}",
+    journal = {Monthly Notices of the Royal Astronomical Society},
+    year = 2024,
+    volume = {527},
+    pages = {7217},
+    doi = {10.1093/mnras/stad3252},
+    note = {Extends GutkinEtAl2016's xi_d depletion mechanism to AGN NLR gas via xi_d^NLR (their Table 2: fixed at 0.3 in fiducial models; Table 3: explored Uniform(0.1,0.5) when fitting it, noting degeneracy with log U_s^NLR and Z_gas^NLR in their own line-ratio fitting) -- anchors dust.depletion.xi_d_nlr's TruncatedNormal(0.3, 0.1, [0,1]) prior. Correction: an earlier pass through this project's own planning misattributed this paper to "Katz et al." -- verified against the real paper 2026-09-15.},
+}
+
+@ARTICLE{MinezakiEtAl2019,
+    author = {{Minezaki}, Takeo and {Yoshii}, Yuzuru and {Kobayashi}, Yukiyasu and {Enya}, Keigo and {Suganuma}, Masahiro and {Tomita}, Hiroyuki and {Aoki}, Tsutomu},
+    title = "{Reverberation Measurements of the Inner Radii of the Dust Tori in Quasars}",
+    journal = {The Astrophysical Journal},
+    year = 2019,
+    volume = {886},
+    pages = {150},
+    doi = {10.3847/1538-4357/ab4f7b},
+    note = {Empirically confirms a torus-radius-vs-luminosity slope (alpha=0.424) shallower than the isotropic Barvainis L^0.5 expectation, attributed to Kawaguchi & Mori's anisotropic-illumination mechanism -- not independently re-imported here (see KawaguchiMori2010's note for why).},
+}
+
+@ARTICLE{WangEtAl2014,
+    author = {{Wang}, Jian-Min and {Qiu}, Jie and {Du}, Pu and {Ho}, Luis~C.},
+    title = "{Self-shadowing Effects of Slim Accretion Disks in Active Galactic Nuclei: The Diverse Appearance of the Broad-line Region}",
+    journal = {The Astrophysical Journal},
+    year = 2014,
+    volume = {797},
+    pages = {65},
+    doi = {10.1088/0004-637X/797/1/65},
+    note = {At high Eddington ratio a slim disc's geometrically/optically thick inner region advects energy inward rather than radiating it, reducing escaping power independent of viewing angle -- a real, distinct (from disc-anisotropy) mechanism for why observed torus/BLR sizes run shallower with luminosity than a naive isotropic formula predicts. Explicitly NOT implemented in quasar_continuum.dissociation_radius this pass (no citable per-object formula found, only population-level slope shifts) -- documented as a known simplification/exclusion for a later improvement.},
 }

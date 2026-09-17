@@ -15,6 +15,10 @@ from the pre-refactor reference implementation on `main` (see registry.py's
 citations); `ZeroInflated` is a genuinely new addition (2026-09-10, the
 quasar/galaxy blending + reddening channel) for parameters with real
 probability mass at exactly zero, which no family ported from `main` needed.
+`TruncatedNormal` is another genuinely new addition (2026-09-15, the dust-
+depletion channel) for a parameter with real prior information around a
+central value (unlike a bare `Uniform`) but a hard physical bound `Normal`
+itself cannot respect.
 """
 from __future__ import annotations
 
@@ -276,6 +280,45 @@ class ZeroInflated:
         return np.where(is_zero, 0.0, self.base.draw(rng, size=size))
 
 
+@dataclass(frozen=True)
+class TruncatedNormal:
+    """N(mean, sigma) truncated to [low, high], via rejection sampling --
+    exact, and keeps this project's NumPy-only convention (no scipy
+    dependency) rather than pulling in `scipy.stats.truncnorm` for one
+    distribution family (same reasoning as `MaxwellBoltzmann`'s own note).
+    Efficient whenever truncation removes only a small tail (the case every
+    catalogued user of this family needs) -- batch-rejects and only
+    re-draws the still-outstanding values each round, rather than drawing
+    one at a time.
+    """
+
+    mean: float
+    sigma: float
+    low: float
+    high: float
+
+    def __post_init__(self) -> None:
+        if not (self.sigma > 0.0):
+            raise ValueError(f"TruncatedNormal requires sigma > 0, got sigma={self.sigma}")
+        if not (self.low < self.high):
+            raise ValueError(f"TruncatedNormal requires low < high, got low={self.low}, high={self.high}")
+
+    @property
+    def support(self) -> tuple[float, float]:
+        return (self.low, self.high)
+
+    def draw(self, rng: np.random.Generator, size: Optional[int] = None):
+        n = 1 if size is None else size
+        result = np.empty(n, dtype=float)
+        pending = np.arange(n)
+        while pending.size > 0:
+            candidates = rng.normal(self.mean, self.sigma, size=pending.size)
+            accepted = (candidates >= self.low) & (candidates <= self.high)
+            result[pending[accepted]] = candidates[accepted]
+            pending = pending[~accepted]
+        return result[0] if size is None else result
+
+
 Distribution = Union[
     Uniform,
     LogUniform,
@@ -288,4 +331,5 @@ Distribution = Union[
     MaxwellBoltzmann,
     Dirichlet,
     ZeroInflated,
+    TruncatedNormal,
 ]

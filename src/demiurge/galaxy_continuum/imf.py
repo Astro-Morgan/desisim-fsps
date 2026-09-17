@@ -33,13 +33,28 @@ to FSPS's assumed solar metallicity (Z_sun = 0.0142, Asplund et al. 2009,
 matching the MIST isochrones this project uses). alpha1_canonical=1.3,
 alpha2_canonical=2.3 (Kroupa 2001).
 
-NOT implemented (fixed at the canonical Kroupa 2001 value, 2.3, regardless
-of Z or SFR): alpha3, the high-mass (>1 Msun) slope -- galIMF's own
-metallicity/density-dependent alpha3 relations require the embedded-cluster
-density, which requires the cluster-mass-function integration this pass is
-explicitly skipping. This means the SFR-driven "top-heavy at high SFR"
-behavior IGIMF theory predicts is NOT captured here -- only the
-metallicity-driven low/intermediate-mass shift is. Flagged, not hidden.
+alpha3, the HIGH-mass (>1 Msun) slope -- the one that actually controls how
+many massive, metal-producing stars form -- is ALSO now metallicity-
+dependent (added 2026-09-16, PI direction), via Recchi, Calura, Gibson &
+Kroupa (2014, MNRAS 437, 994) eq. 6 ("mild" model, galIMF's own `'R14'`
+option, independently confirmed against galIMF's source):
+
+    alpha3(Z) = alpha3_canonical + 0.0572 * [Fe/H]
+
+This is a genuine metallicity-ONLY simplification of galIMF's full
+density+metallicity joint relation (Marks, Kroupa, Dabringhausen &
+Pawlowski 2012, MNRAS 422, 2246, their eq. 15) -- Recchi et al. (2014)
+derive it by fixing the embedded-cluster density at a constant fiducial
+value inside that joint relation, avoiding the cluster-mass-function
+integration this project still doesn't implement. [Fe/H] is approximated
+here by the same [M/H]=log10(Z/Z_sun) quantity alpha1/alpha2 already use
+(consistent with this module's existing convention, not a new one).
+Previously alpha3 was held fixed at the canonical value regardless of Z --
+this NOT-implemented gap, and the "SFR-driven top-heavy at high SFR"
+behavior IGIMF theory separately predicts (still not captured -- that
+piece needs the SFR-dependent term of the Marks et al. relation, which R14
+does not simplify), are both worth remembering as the actual limitations,
+now that the metallicity-only piece is real.
 
 This module only computes IMF slopes for a *given* metallicity -- splitting
 a continuous SFH into per-metallicity (and, in dynamic-IMF mode, per-IMF)
@@ -65,6 +80,7 @@ Z_SUN = 0.0142  # Asplund et al. (2009); matches the MIST isochrones this projec
 ALPHA1_CANONICAL = 1.3
 ALPHA2_CANONICAL = 2.3
 ALPHA3_CANONICAL = 2.3
+ALPHA3_R14_SLOPE = 0.0572  # Recchi, Calura, Gibson & Kroupa (2014, MNRAS 437, 994) eq. 6, "mild" model
 
 
 @dataclass(frozen=True)
@@ -81,8 +97,8 @@ def canonical_slopes() -> IMFSlopes:
 
 
 def metallicity_dependent_slopes(z_absolute: float) -> IMFSlopes:
-    """alpha1/alpha2 shifted per the cited galIMF relation; alpha3 held
-    canonical (see module docstring for what's NOT implemented here).
+    """alpha1/alpha2/alpha3 all shifted per the cited relations (see module
+    docstring for what's still NOT implemented -- the SFR-dependent term).
     `z_absolute` is metallicity in absolute units (matching
     `galaxy_continuum.metallicity`'s Z(t), not log or solar-relative).
     """
@@ -92,5 +108,5 @@ def metallicity_dependent_slopes(z_absolute: float) -> IMFSlopes:
     return IMFSlopes(
         imf1=ALPHA1_CANONICAL + 0.5 * m_over_h,
         imf2=ALPHA2_CANONICAL + 0.5 * m_over_h,
-        imf3=ALPHA3_CANONICAL,
+        imf3=ALPHA3_CANONICAL + ALPHA3_R14_SLOPE * m_over_h,
     )

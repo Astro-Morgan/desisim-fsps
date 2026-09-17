@@ -11,6 +11,7 @@ from demiurge.galaxy_continuum.metal_yield import (
     effective_yield,
     effective_yield_at_z,
     integrate_self_consistent_z,
+    integrate_self_consistent_z_batch,
     yield_mean,
     yield_sigma_relative,
 )
@@ -206,6 +207,71 @@ def test_reproducible_given_same_seed():
     b = draw_self_consistent_metallicity(np.random.default_rng(42), mu_grid)
     assert a.yield_scatter == b.yield_scatter
     np.testing.assert_array_equal(a.z_grid, b.z_grid)
+
+
+# ---- array-capable yield_mean/yield_sigma_relative/effective_yield_at_z (2026-09-17) ----
+
+
+def test_yield_mean_array_input_matches_looping_the_scalar_path():
+    fehs = np.linspace(-3.5, 0.5, 25)
+    z_values = imf_module.Z_SUN * 10.0 ** fehs
+    batched = yield_mean(z_values)
+    looped = np.array([yield_mean(z) for z in z_values])
+    assert batched.shape == z_values.shape
+    np.testing.assert_array_equal(batched, looped)
+
+
+def test_yield_sigma_relative_array_input_matches_looping_the_scalar_path():
+    fehs = np.linspace(-4.0, 1.0, 25)
+    z_values = imf_module.Z_SUN * 10.0 ** fehs
+    batched = yield_sigma_relative(z_values)
+    looped = np.array([yield_sigma_relative(z) for z in z_values])
+    np.testing.assert_array_equal(batched, looped)
+
+
+def test_effective_yield_at_z_array_input_matches_looping_the_scalar_path():
+    rng = np.random.default_rng(21)
+    z_values = imf_module.Z_SUN * 10.0 ** rng.uniform(-4.0, 1.0, size=25)
+    scatters = rng.normal(size=25)
+    batched = effective_yield_at_z(z_values, scatters)
+    looped = np.array([effective_yield_at_z(z, s) for z, s in zip(z_values, scatters)])
+    np.testing.assert_array_equal(batched, looped)
+
+
+def test_scalar_inputs_still_return_plain_python_floats():
+    """Regression guard: the array-support generalization must not turn
+    scalar calls into length-1 arrays -- existing callers (and tests
+    throughout this file) rely on a plain float coming back."""
+    assert isinstance(yield_mean(0.01), float)
+    assert isinstance(yield_sigma_relative(0.01), float)
+    assert isinstance(effective_yield_at_z(0.01, 0.5), float)
+
+
+# ---- integrate_self_consistent_z_batch (2026-09-17) ----
+
+
+def test_batch_integrator_matches_looping_the_scalar_integrator():
+    """Full trajectory, not just the endpoint -- population_inversion.py
+    needs every grid point to compute the mass-weighted integral."""
+    rng = np.random.default_rng(23)
+    n_points, n_grid = 15, 40
+    mu_batch = np.sort(rng.uniform(0.2, 1.0, size=(n_points, n_grid)), axis=1)[:, ::-1]
+    mu_batch[:, 0] = 1.0
+    scatters = rng.normal(size=n_points)
+
+    batched = integrate_self_consistent_z_batch(mu_batch, scatters)
+    assert batched.shape == (n_points, n_grid)
+    looped = np.array([integrate_self_consistent_z(mu_batch[i], scatters[i]) for i in range(n_points)])
+    np.testing.assert_array_equal(batched, looped)
+
+
+def test_batch_integrator_starts_at_zero_and_is_nondecreasing_per_row():
+    rng = np.random.default_rng(24)
+    mu_batch = np.tile(np.linspace(1.0, 0.4, 30), (5, 1))
+    scatters = rng.normal(size=5)
+    z = integrate_self_consistent_z_batch(mu_batch, scatters)
+    assert np.all(z[:, 0] == 0.0)
+    assert np.all(np.diff(z, axis=1) >= -1e-12)
 
 
 def test_registry_entry_matches_decided_distribution():

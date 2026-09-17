@@ -1,12 +1,18 @@
 import numpy as np
 import pytest
 
+from demiurge.galaxy_continuum import imf as imf_module
+from demiurge.galaxy_continuum.metal_yield import integrate_self_consistent_z_batch
 from demiurge.galaxy_continuum.metallicity import evaluate_closed_box
 from demiurge.galaxy_continuum.population_inversion import (
     PopulationTargetGrid,
+    SelfConsistentPopulationTargetGrid,
     build_population_target_grid,
+    build_self_consistent_population_target_grid,
+    build_self_consistent_targeted_samples,
     build_targeted_samples,
     evaluate_population,
+    evaluate_population_self_consistent,
     mass_weighted_z_closed_form,
     sample_yield_efficiency_for_target_z,
     stick_breaking_gap_fractions,
@@ -277,3 +283,165 @@ def test_build_population_target_grid_with_target_z_values_concatenates_extra_po
         target_z_values=[2.5e-4], n_yield_efficiency_points_per_target=5, n_shape_draws_per_target_point=4,
     )
     assert len(grid_with) == len(grid_without) + 5 * 4
+
+
+# =============================================================================
+# Self-consistent extension (2026-09-17): evaluate_population_self_consistent,
+# build_self_consistent_targeted_samples, build_self_consistent_population_target_grid
+# =============================================================================
+
+T_OBS_SC = 13.8
+REPRESENTATIVE_TARGETS = {
+    "thin disc": dict(age=4.0, feh=-0.10),
+    "halo": dict(age=12.0, feh=-1.75),
+    "massive elliptical": dict(age=10.0, feh=+0.30),
+}
+
+
+def _target_z(feh):
+    return imf_module.Z_SUN * 10.0 ** feh
+
+
+# ---- evaluate_population_self_consistent ----
+
+
+def test_evaluate_population_self_consistent_matches_manual_computation():
+    """Internal-consistency check, same spirit as evaluate_population's own
+    test_age_matches_trapz_of_the_actual_reconstructed_f: recompute via the
+    lower-level pieces directly and confirm the public function agrees."""
+    from demiurge.galaxy_continuum.population_inversion import _reconstruct_age_f_and_mu_grid
+
+    gap_fractions = _gap_fractions()
+    length_scale, efficiency, yield_scatter = 0.2, 0.5, 0.7
+    age_expected, f_grid, mu_grid = _reconstruct_age_f_and_mu_grid(
+        gap_fractions, length_scale, efficiency, t_obs_gyr=T_OBS_SC, n_grid=30
+    )
+    z_grid = integrate_self_consistent_z_batch(mu_grid[np.newaxis, :], np.array([yield_scatter]))[0]
+    z_expected = float(np.trapezoid(z_grid, f_grid))
+
+    summary = evaluate_population_self_consistent(
+        gap_fractions, length_scale, efficiency, yield_scatter, t_obs_gyr=T_OBS_SC, n_grid=30
+    )
+    assert summary.mass_weighted_age_gyr == pytest.approx(age_expected)
+    assert summary.mass_weighted_z == pytest.approx(z_expected)
+
+
+def test_mass_weighted_z_is_not_the_endpoint_value():
+    """Regression guard for the exact bug caught during implementation:
+    an earlier version of the batched integrator returned only Z(t_obs)
+    (the endpoint), which is a genuinely different, smaller-magnitude-at-
+    the-end-relative-to-trajectory quantity than the mass-weighted
+    integral -- for a real, nontrivial trajectory, these must differ."""
+    gap_fractions = _gap_fractions()
+    summary = evaluate_population_self_consistent(gap_fractions, 0.2, 0.5, 0.0, t_obs_gyr=T_OBS_SC, n_grid=30)
+
+    from demiurge.galaxy_continuum.population_inversion import _reconstruct_age_f_and_mu_grid
+
+    _, f_grid, mu_grid = _reconstruct_age_f_and_mu_grid(gap_fractions, 0.2, 0.5, t_obs_gyr=T_OBS_SC, n_grid=30)
+    z_grid = integrate_self_consistent_z_batch(mu_grid[np.newaxis, :], np.array([0.0]))[0]
+    z_endpoint = z_grid[-1]
+
+    assert summary.mass_weighted_z != pytest.approx(z_endpoint)
+    assert summary.mass_weighted_z < z_endpoint  # Z(t) rises monotonically, so the mass-weighted average < endpoint
+
+
+def test_evaluate_population_self_consistent_higher_scatter_gives_higher_z():
+    gap_fractions = _gap_fractions()
+    lo = evaluate_population_self_consistent(gap_fractions, 0.2, 0.5, -1.0, t_obs_gyr=T_OBS_SC, n_grid=30)
+    hi = evaluate_population_self_consistent(gap_fractions, 0.2, 0.5, 1.0, t_obs_gyr=T_OBS_SC, n_grid=30)
+    assert hi.mass_weighted_z > lo.mass_weighted_z
+
+
+# ---- build_self_consistent_targeted_samples ----
+
+
+@pytest.mark.parametrize("label,spec", list(REPRESENTATIVE_TARGETS.items()))
+def test_targeted_samples_hit_representative_targets_accurately(label, spec):
+    """The real validation this feature was built for: reproduces (within
+    tolerance) the sandboxed accuracy numbers for all 3 representative
+    literature targets before this was trusted enough to implement."""
+    target_z = _target_z(spec["feh"])
+    extra = build_self_consistent_targeted_samples(
+        spec["age"], target_z, 20, np.random.default_rng(hash(label) % (2**31)),
+        t_obs_gyr=T_OBS_SC, n_grid=30, n_candidate_shapes=4000,
+    )
+    assert extra["mass_weighted_z"].shape == (20,)
+    rel_z_err = np.abs(np.median(extra["mass_weighted_z"]) - target_z) / target_z
+    assert rel_z_err < 0.01, f"{label}: Z relative error {rel_z_err:.4%} too large"
+    age_err = abs(extra["mass_weighted_age_gyr"].mean() - spec["age"])
+    assert age_err < 2.0, f"{label}: age error {age_err:.2f} Gyr too large"
+
+
+def test_targeted_samples_dict_has_the_expected_keys_and_shapes():
+    extra = build_self_consistent_targeted_samples(
+        4.0, _target_z(-0.1), 10, np.random.default_rng(0), t_obs_gyr=T_OBS_SC, n_grid=30,
+    )
+    for key in ("gap_fractions", "gp_length_scale_fraction", "star_formation_efficiency",
+                "yield_scatter", "mass_weighted_age_gyr", "mass_weighted_z"):
+        assert key in extra
+    assert extra["gap_fractions"].shape == (10, 4)
+    assert extra["yield_scatter"].shape == (10,)
+
+
+def test_targeted_samples_raises_when_target_is_unreachable():
+    with pytest.raises(ValueError):
+        build_self_consistent_targeted_samples(
+            4.0, 1.0, 10, np.random.default_rng(0),  # Z=1.0 is absurdly high, unreachable
+            t_obs_gyr=T_OBS_SC, n_grid=30, n_candidate_shapes=200, max_candidate_shapes=800,
+        )
+
+
+def test_targeted_samples_grows_the_candidate_pool_for_a_rare_target():
+    """The halo case needs more than the default starting pool -- confirms
+    the automatic growth loop actually engages rather than erroring."""
+    extra = build_self_consistent_targeted_samples(
+        12.0, _target_z(-1.75), 15, np.random.default_rng(5),
+        t_obs_gyr=T_OBS_SC, n_grid=30, n_candidate_shapes=500,  # deliberately small starting pool
+    )
+    assert extra["mass_weighted_z"].shape == (15,)
+
+
+def test_targeted_samples_reproducible_given_same_seed():
+    a = build_self_consistent_targeted_samples(4.0, _target_z(-0.1), 10, np.random.default_rng(7), t_obs_gyr=T_OBS_SC, n_grid=30)
+    b = build_self_consistent_targeted_samples(4.0, _target_z(-0.1), 10, np.random.default_rng(7), t_obs_gyr=T_OBS_SC, n_grid=30)
+    np.testing.assert_array_equal(a["mass_weighted_z"], b["mass_weighted_z"])
+    np.testing.assert_array_equal(a["mass_weighted_age_gyr"], b["mass_weighted_age_gyr"])
+
+
+# ---- SelfConsistentPopulationTargetGrid / build_self_consistent_population_target_grid ----
+
+
+def test_build_self_consistent_grid_shapes():
+    grid = build_self_consistent_population_target_grid(
+        rng=np.random.default_rng(1), t_obs_gyr=T_OBS_SC, n_grid=30, n_grid_points_per_axis=2, n_monte_carlo=10,
+    )
+    expected_len = 2 ** 3 * 2 * 2 + 10  # 3 stick-breaking axes + length_scale axis + efficiency axis, plus MC
+    assert len(grid) == expected_len
+    assert grid.gap_fractions.shape == (expected_len, 4)
+    assert np.all(np.isfinite(grid.mass_weighted_age_gyr))
+    assert np.all(np.isfinite(grid.mass_weighted_z))
+
+
+def test_build_self_consistent_grid_with_targets_concatenates_extra_points():
+    grid_without = build_self_consistent_population_target_grid(
+        rng=np.random.default_rng(2), t_obs_gyr=T_OBS_SC, n_grid=30, n_grid_points_per_axis=2, n_monte_carlo=10,
+    )
+    grid_with = build_self_consistent_population_target_grid(
+        rng=np.random.default_rng(2), t_obs_gyr=T_OBS_SC, n_grid=30, n_grid_points_per_axis=2, n_monte_carlo=10,
+        targets=[(4.0, _target_z(-0.1))], n_points_per_target=8,
+    )
+    assert len(grid_with) == len(grid_without) + 8
+
+
+def test_self_consistent_grid_nearest_and_concatenate_are_consistent_with_the_old_grid_api():
+    grid = SelfConsistentPopulationTargetGrid(
+        gap_fractions=np.tile(np.array([0.25, 0.25, 0.25, 0.25]), (3, 1)),
+        gp_length_scale_fraction=np.full(3, 0.2),
+        star_formation_efficiency=np.full(3, 0.5),
+        yield_scatter=np.full(3, 0.0),
+        mass_weighted_age_gyr=np.array([1.0, 2.0, 3.0]),
+        mass_weighted_z=np.array([0.1, 0.2, 0.3]),
+        t_obs_gyr=T_OBS_SC,
+    )
+    idx = grid.nearest(target_age_gyr=2.0, target_z=0.2, k=100)
+    assert set(idx.tolist()) == {0, 1, 2}

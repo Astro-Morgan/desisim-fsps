@@ -73,6 +73,59 @@ z~0 age of the Universe) since the literature targets this module targets
 are themselves local-Universe (z~0) population properties -- a deliberate
 scope limit for this first pass, not a hidden assumption; a future need to
 target non-local zones would need `t_obs_gyr` as its own grid axis.
+
+=== Self-consistent extension (2026-09-17), per Andy's stated preference ===
+
+`evaluate_population_self_consistent`/`build_self_consistent_targeted_samples`/
+`build_self_consistent_population_target_grid` are the SAME idea, using
+`metal_yield.py`'s real metallicity-dependent yield(Z) instead of the
+constant-`yield`-per-mock closed-box relation above -- what Andy asked for
+after `metal_yield.py` was built ("my preference is for the SFH/Z inversion
+to use the more accurate metallicity-dependent IMF and yield model").
+
+This is NOT a drop-in swap, for a real reason: `mass_weighted_z_closed_form`
+above only exists BECAUSE `Z(t_obs)` and `mass_weighted_z` have closed forms
+independent of SFH shape under the OLD constant-yield relation. Once yield
+depends on the evolving Z(t) itself, that independence is gone -- there is
+no equivalent closed form, and `sample_yield_efficiency_for_target_z`'s
+whole trick (solve algebra for the exact (yield,efficiency) pair) has
+nothing to solve algebraically anymore.
+
+The fix, benchmarked for real (sandboxed) before writing any of this:
+NUMERICAL bisection over `yield_scatter` (the one knob that shifts the
+whole yield(Z) curve up or down) replaces algebra -- monotonic in its
+effect on the final Z, so bisection converges reliably. Two real costs
+this surfaced, both addressed below:
+
+1. **The self-consistent forward evaluation is ~300x slower per call**
+   than the old closed form (measured directly: ~53ms vs ~0.17ms) --
+   entirely the cost of RK4-stepping through the enrichment history
+   instead of one formula evaluation. Addressed two ways: (a) a coarser
+   step grid, `DEFAULT_N_GRID_SELF_CONSISTENT=30` instead of 200 -- checked
+   directly against n_grid=200 "ground truth" and found <5% deviation,
+   negligible next to the 35-70% astrophysical scatter `metal_yield.py`
+   already models; (b) `metal_yield.integrate_self_consistent_z_batch`
+   (vectorized across many points' bisection trials at once, instead of
+   one Python-level call per point) -- combined, roughly 100x faster than
+   the naive per-point approach, confirmed by direct benchmark.
+2. **Blind rejection sampling for AGE (accept within a fixed window of
+   the target) is biased** -- if the underlying shape prior isn't locally
+   symmetric around the target age, the accepted sample inherits that
+   asymmetry. Fixed by switching to "draw a large, cheap pool of candidate
+   shapes (age alone is cheap to check -- no ODE needed) and keep whichever
+   are CLOSEST to the target," rather than "accept the first ones inside a
+   fixed radius." For common ages this converges with a modest pool; for
+   genuinely rare ages (e.g. a 12 Gyr halo-like target, where old shapes
+   are intrinsically uncommon under the current symmetric Dirichlet(2,2,2,2)
+   prior), a larger pool is needed to close the bias fully -- checked
+   directly (pool size 4,000 -> 60,000 shrank the halo bias from -0.47 Gyr
+   to -0.01 Gyr) rather than assumed adequate at a fixed size.
+3. Reachability is checked BEFORE nearest-in-age selection (not after) --
+   an earlier sandboxed pass picked nearest-in-age first and only then
+   checked which of those happened to also reach the target Z, which
+   under-fills the requested batch size unpredictably; filtering for
+   reachability first guarantees the requested count whenever the pool is
+   large enough to contain that many reachable candidates.
 """
 from __future__ import annotations
 
@@ -81,6 +134,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
+from .metal_yield import integrate_self_consistent_z_batch
 from .metallicity import evaluate_closed_box
 from .sfh import QUANTILE_FRACTIONS, reconstruct_cumulative_sfh
 from ..parameters.registry import get_parameter
@@ -90,8 +144,12 @@ _GAP_FRACTIONS_NAME = "galaxy_continuum.sfh.mass_quantile_gap_fractions"
 _LENGTH_SCALE_NAME = "galaxy_continuum.sfh.gp_length_scale_fraction"
 _YIELD_NAME = "galaxy_continuum.metallicity.yield"
 _EFFICIENCY_NAME = "galaxy_continuum.metallicity.star_formation_efficiency"
+_YIELD_SCATTER_NAME = "galaxy_continuum.metallicity.yield_scatter"
 
 DEFAULT_T_OBS_GYR = 13.8
+DEFAULT_N_GRID_SELF_CONSISTENT = 30  # vs. 200 for the closed-box path -- checked directly
+# (see module docstring): <5% deviation from n_grid=200, negligible next to the 35-70%
+# astrophysical scatter metal_yield.py already models. ~6x fewer RK4 steps per evaluation.
 
 
 @dataclass(frozen=True)
@@ -153,6 +211,67 @@ def evaluate_population(
     mass_weighted_z = float(np.trapezoid(z_grid, f_grid))
 
     return PopulationSummary(mass_weighted_age_gyr=mass_weighted_age_gyr, mass_weighted_z=mass_weighted_z)
+
+
+def _reconstruct_age_f_and_mu_grid(
+    mass_quantile_gap_fractions: np.ndarray,
+    gp_length_scale_fraction: float,
+    star_formation_efficiency: float,
+    *,
+    t_obs_gyr: float = DEFAULT_T_OBS_GYR,
+    n_grid: int = DEFAULT_N_GRID_SELF_CONSISTENT,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """Shared by `evaluate_population_self_consistent` and the targeted-
+    batch builder below: age, F(t), and mu(t) depend only on SFH shape +
+    efficiency, never on yield_scatter -- computing them once and reusing
+    across many yield_scatter trials (the whole point of the bisection
+    search) avoids redundant work. Deliberately cheap: no ODE integration
+    happens in this function. Returns `f_grid` (needed afterward for the
+    mass-weighted Z integral, `trapz(z_grid, f_grid)`) alongside `mu_grid`
+    (needed to DRIVE that integral) -- returning only one and re-deriving
+    the other would be more error-prone than just returning both.
+    """
+    gap_fractions = np.asarray(mass_quantile_gap_fractions, dtype=float)
+    if gap_fractions.shape != (len(QUANTILE_FRACTIONS) + 1,):
+        raise ValueError(
+            f"mass_quantile_gap_fractions must have {len(QUANTILE_FRACTIONS) + 1} components, "
+            f"got shape {gap_fractions.shape}"
+        )
+    length_scale_gyr = gp_length_scale_fraction * t_obs_gyr
+    quantile_times_gyr = np.cumsum(gap_fractions * t_obs_gyr)[:-1]
+    t_grid_gyr = np.linspace(0.0, t_obs_gyr, n_grid)
+    f_grid = reconstruct_cumulative_sfh(t_grid_gyr, quantile_times_gyr, t_obs_gyr, length_scale_gyr)
+    age_gyr = float(np.trapezoid(f_grid, t_grid_gyr))
+    mu_grid = 1.0 - star_formation_efficiency * f_grid
+    return age_gyr, f_grid, mu_grid
+
+
+def evaluate_population_self_consistent(
+    mass_quantile_gap_fractions: np.ndarray,
+    gp_length_scale_fraction: float,
+    star_formation_efficiency: float,
+    yield_scatter: float,
+    *,
+    t_obs_gyr: float = DEFAULT_T_OBS_GYR,
+    n_grid: int = DEFAULT_N_GRID_SELF_CONSISTENT,
+) -> PopulationSummary:
+    """Self-consistent sibling of `evaluate_population`: uses
+    `metal_yield.py`'s real metallicity-dependent yield(Z) (via the RK4
+    ODE) instead of the constant-`yield`-per-mock closed-box relation --
+    `yield_scatter` replaces `yield_` as the free per-mock knob (see module
+    docstring for why there is no drop-in closed form once yield depends
+    on the evolving Z(t) itself). `mass_weighted_z` is
+    `trapz(z_grid, f_grid)`, the SAME mass-weighted definition
+    `evaluate_population` uses -- NOT `Z(t_obs)` (the endpoint), which is a
+    genuinely different, and here wrong, quantity (see module docstring).
+    """
+    age_gyr, f_grid, mu_grid = _reconstruct_age_f_and_mu_grid(
+        mass_quantile_gap_fractions, gp_length_scale_fraction, star_formation_efficiency,
+        t_obs_gyr=t_obs_gyr, n_grid=n_grid,
+    )
+    z_grid = integrate_self_consistent_z_batch(mu_grid[np.newaxis, :], np.array([yield_scatter]))[0]
+    mass_weighted_z = float(np.trapezoid(z_grid, f_grid))
+    return PopulationSummary(mass_weighted_age_gyr=age_gyr, mass_weighted_z=mass_weighted_z)
 
 
 def mass_weighted_z_closed_form(yield_: float, star_formation_efficiency: float) -> float:
@@ -287,6 +406,235 @@ def build_targeted_samples(
         mass_weighted_age_gyr=np.asarray(out_age),
         mass_weighted_z=np.asarray(out_z),
     )
+
+
+def build_self_consistent_targeted_samples(
+    target_age_gyr: float,
+    target_z: float,
+    n_points: int,
+    rng: np.random.Generator,
+    *,
+    sampler: Optional[ParameterSampler] = None,
+    t_obs_gyr: float = DEFAULT_T_OBS_GYR,
+    n_grid: int = DEFAULT_N_GRID_SELF_CONSISTENT,
+    n_candidate_shapes: int = 4_000,
+    n_bisect_iter: int = 25,
+    yield_scatter_bounds: tuple[float, float] = (-8.0, 8.0),
+    max_candidate_shapes: int = 500_000,
+) -> dict[str, np.ndarray]:
+    """The self-consistent analogue of `build_targeted_samples` -- built
+    via numerical bisection over `yield_scatter` instead of algebra (no
+    closed form exists once yield depends on the evolving Z(t) itself; see
+    module docstring), and TARGETING AGE TOO (not just Z, an improvement
+    over the old function): draws a large, cheap pool of candidate SFH
+    shapes (checking a shape's AGE needs no ODE integration at all -- only
+    Z-matching does), keeps the `n_points` CLOSEST in age among those that
+    can ALSO reach `target_z` (reachability checked FIRST, then
+    nearest-in-age -- checking the other order first under-fills the
+    requested count unpredictably, found and fixed 2026-09-17), then
+    batch-bisects `yield_scatter` across exactly those `n_points` at once.
+
+    The candidate pool grows automatically (doubling) if too few reachable
+    points are found -- genuinely rare target ages (e.g. an old, halo-like
+    12 Gyr target under the current symmetric shape prior) need a much
+    bigger pool than common ones to close the age gap fully; checked
+    directly, not assumed adequate at a fixed size (2026-09-16 sandbox:
+    4,000 candidates left the halo case biased by -0.47 Gyr, 60,000 closed
+    it to -0.01 Gyr). Raises if `max_candidate_shapes` is exhausted first.
+    """
+    if sampler is None:
+        sampler = PriorSampler()
+
+    n_candidates = n_candidate_shapes
+    while True:
+        draws = sampler.sample(
+            [_GAP_FRACTIONS_NAME, _LENGTH_SCALE_NAME, _EFFICIENCY_NAME], rng=rng, size=n_candidates,
+        )
+        gap_all = np.asarray(draws[_GAP_FRACTIONS_NAME])
+        ls_all = np.asarray(draws[_LENGTH_SCALE_NAME])
+        eff_all = np.asarray(draws[_EFFICIENCY_NAME])
+
+        ages = np.empty(n_candidates)
+        f_grids = np.empty((n_candidates, n_grid))
+        mu_grids = np.empty((n_candidates, n_grid))
+        for i in range(n_candidates):
+            ages[i], f_grids[i], mu_grids[i] = _reconstruct_age_f_and_mu_grid(
+                gap_all[i], ls_all[i], eff_all[i], t_obs_gyr=t_obs_gyr, n_grid=n_grid,
+            )
+
+        lo_bound, hi_bound = yield_scatter_bounds
+        z_lo = np.trapezoid(
+            integrate_self_consistent_z_batch(mu_grids, np.full(n_candidates, lo_bound)), f_grids, axis=1
+        )
+        z_hi = np.trapezoid(
+            integrate_self_consistent_z_batch(mu_grids, np.full(n_candidates, hi_bound)), f_grids, axis=1
+        )
+        reachable = (z_lo <= target_z) & (target_z <= z_hi)
+
+        if reachable.sum() >= n_points or n_candidates >= max_candidate_shapes:
+            break
+        n_candidates = min(n_candidates * 4, max_candidate_shapes)
+
+    if reachable.sum() < n_points:
+        raise ValueError(
+            f"Only found {int(reachable.sum())} reachable candidates for target_z={target_z:.4e} out of "
+            f"{n_candidates} tried (max_candidate_shapes={max_candidate_shapes}) -- target_z may be outside "
+            f"this model's achievable range."
+        )
+
+    reachable_idx = np.flatnonzero(reachable)
+    nearest = reachable_idx[np.argsort(np.abs(ages[reachable_idx] - target_age_gyr))[:n_points]]
+
+    gap_batch = gap_all[nearest]
+    ls_batch = ls_all[nearest]
+    eff_batch = eff_all[nearest]
+    mu_batch = mu_grids[nearest]
+    f_batch = f_grids[nearest]
+
+    lo = np.full(n_points, lo_bound)
+    hi = np.full(n_points, hi_bound)
+    for _ in range(n_bisect_iter):
+        mid = 0.5 * (lo + hi)
+        z_mid = np.trapezoid(integrate_self_consistent_z_batch(mu_batch, mid), f_batch, axis=1)
+        go_up = z_mid < target_z
+        lo = np.where(go_up, mid, lo)
+        hi = np.where(go_up, hi, mid)
+    yield_scatter_batch = 0.5 * (lo + hi)
+    z_final = np.trapezoid(integrate_self_consistent_z_batch(mu_batch, yield_scatter_batch), f_batch, axis=1)
+
+    return dict(
+        gap_fractions=gap_batch,
+        gp_length_scale_fraction=ls_batch,
+        star_formation_efficiency=eff_batch,
+        yield_scatter=yield_scatter_batch,
+        mass_weighted_age_gyr=ages[nearest],
+        mass_weighted_z=z_final,
+    )
+
+
+@dataclass(frozen=True)
+class SelfConsistentPopulationTargetGrid:
+    """Self-consistent analogue of `PopulationTargetGrid` -- `yield_scatter`
+    replaces `yield_` as the free per-mock knob (see module docstring)."""
+
+    gap_fractions: np.ndarray
+    gp_length_scale_fraction: np.ndarray
+    star_formation_efficiency: np.ndarray
+    yield_scatter: np.ndarray
+    mass_weighted_age_gyr: np.ndarray
+    mass_weighted_z: np.ndarray
+    t_obs_gyr: float
+
+    def __len__(self) -> int:
+        return self.mass_weighted_age_gyr.shape[0]
+
+    def nearest(self, target_age_gyr: float, target_z: float, k: int = 50) -> np.ndarray:
+        """Same normalized-distance k-NN as `PopulationTargetGrid.nearest`
+        -- still useful for querying the blind grid+MC portion of a
+        combined grid, even though the targeted portion (built via
+        `build_self_consistent_targeted_samples`) doesn't need it."""
+        age_scale = float(np.std(self.mass_weighted_age_gyr)) or 1.0
+        z_scale = float(np.std(self.mass_weighted_z)) or 1.0
+        d2 = (
+            ((self.mass_weighted_age_gyr - target_age_gyr) / age_scale) ** 2
+            + ((self.mass_weighted_z - target_z) / z_scale) ** 2
+        )
+        k = min(k, d2.shape[0])
+        return np.argpartition(d2, k - 1)[:k]
+
+    def concatenate(self, extra: dict[str, np.ndarray]) -> "SelfConsistentPopulationTargetGrid":
+        return SelfConsistentPopulationTargetGrid(
+            gap_fractions=np.concatenate([self.gap_fractions, extra["gap_fractions"]]),
+            gp_length_scale_fraction=np.concatenate(
+                [self.gp_length_scale_fraction, extra["gp_length_scale_fraction"]]
+            ),
+            star_formation_efficiency=np.concatenate(
+                [self.star_formation_efficiency, extra["star_formation_efficiency"]]
+            ),
+            yield_scatter=np.concatenate([self.yield_scatter, extra["yield_scatter"]]),
+            mass_weighted_age_gyr=np.concatenate([self.mass_weighted_age_gyr, extra["mass_weighted_age_gyr"]]),
+            mass_weighted_z=np.concatenate([self.mass_weighted_z, extra["mass_weighted_z"]]),
+            t_obs_gyr=self.t_obs_gyr,
+        )
+
+
+def build_self_consistent_population_target_grid(
+    *,
+    rng: np.random.Generator,
+    t_obs_gyr: float = DEFAULT_T_OBS_GYR,
+    n_grid: int = DEFAULT_N_GRID_SELF_CONSISTENT,
+    n_grid_points_per_axis: int = 4,
+    n_monte_carlo: int = 500,
+    targets: Optional[Sequence[tuple[float, float]]] = None,
+    n_points_per_target: int = 30,
+    sampler: Optional[ParameterSampler] = None,
+) -> SelfConsistentPopulationTargetGrid:
+    """Self-consistent analogue of `build_population_target_grid`: a modest
+    blind dense-grid + Monte-Carlo cloud (smaller defaults than the old
+    closed-box version's -- each point now costs real ODE integration, not
+    free algebra, so blind coverage is for general/boundary sanity, not
+    for carrying sparse regions -- that's `targets`' job) UNIONED with
+    targeted batches (`build_self_consistent_targeted_samples`) for each
+    `(target_age_gyr, target_z)` pair in `targets`.
+    """
+    if sampler is None:
+        sampler = PriorSampler()
+
+    length_scale_low, length_scale_high = get_parameter(_LENGTH_SCALE_NAME).distribution.support
+    efficiency_low, efficiency_high = get_parameter(_EFFICIENCY_NAME).distribution.support
+
+    v_axis = np.linspace(0.0, 1.0, n_grid_points_per_axis)
+    length_scale_axis = np.linspace(length_scale_low, length_scale_high, n_grid_points_per_axis)
+    efficiency_axis = np.linspace(efficiency_low, efficiency_high, n_grid_points_per_axis)
+
+    grid_gap, grid_ls, grid_eff = [], [], []
+    for v0 in v_axis:
+        for v1 in v_axis:
+            for v2 in v_axis:
+                gap = stick_breaking_gap_fractions(np.array([v0, v1, v2]))
+                for ls in length_scale_axis:
+                    for eff in efficiency_axis:
+                        grid_gap.append(gap)
+                        grid_ls.append(ls)
+                        grid_eff.append(eff)
+
+    mc_draws = sampler.sample(
+        [_GAP_FRACTIONS_NAME, _LENGTH_SCALE_NAME, _EFFICIENCY_NAME], rng=rng, size=n_monte_carlo,
+    )
+    all_gap = np.concatenate([np.asarray(grid_gap), np.asarray(mc_draws[_GAP_FRACTIONS_NAME])])
+    all_ls = np.concatenate([np.asarray(grid_ls), np.asarray(mc_draws[_LENGTH_SCALE_NAME])])
+    all_eff = np.concatenate([np.asarray(grid_eff), np.asarray(mc_draws[_EFFICIENCY_NAME])])
+    n_blind = all_gap.shape[0]
+
+    blind_ages = np.empty(n_blind)
+    blind_f = np.empty((n_blind, n_grid))
+    blind_mu = np.empty((n_blind, n_grid))
+    for i in range(n_blind):
+        blind_ages[i], blind_f[i], blind_mu[i] = _reconstruct_age_f_and_mu_grid(
+            all_gap[i], all_ls[i], all_eff[i], t_obs_gyr=t_obs_gyr, n_grid=n_grid,
+        )
+    blind_yield_scatter = sampler.sample([_YIELD_SCATTER_NAME], rng=rng, size=n_blind)[_YIELD_SCATTER_NAME]
+    blind_z_grid = integrate_self_consistent_z_batch(blind_mu, np.asarray(blind_yield_scatter))
+    blind_z = np.trapezoid(blind_z_grid, blind_f, axis=1)
+
+    result = SelfConsistentPopulationTargetGrid(
+        gap_fractions=all_gap,
+        gp_length_scale_fraction=all_ls,
+        star_formation_efficiency=all_eff,
+        yield_scatter=np.asarray(blind_yield_scatter),
+        mass_weighted_age_gyr=blind_ages,
+        mass_weighted_z=blind_z,
+        t_obs_gyr=t_obs_gyr,
+    )
+
+    for target_age_gyr, target_z in targets or []:
+        extra = build_self_consistent_targeted_samples(
+            target_age_gyr, target_z, n_points_per_target, rng,
+            sampler=sampler, t_obs_gyr=t_obs_gyr, n_grid=n_grid,
+        )
+        result = result.concatenate(extra)
+
+    return result
 
 
 @dataclass(frozen=True)

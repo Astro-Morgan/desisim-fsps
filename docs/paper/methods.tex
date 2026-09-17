@@ -162,6 +162,40 @@ draws paired with each targeted $(y,\epsilon)$ point still come from the
 unconditional shape prior, so matching a target's AGE within the targeted
 set is still down to luck, not yet similarly targeted.
 
+\paragraph{Self-consistent extension (2026-09-17).} Andy's stated
+preference, once Section~\ref{sec:metal-yield}'s metallicity-dependent
+yield existed: use it here instead of the constant-yield closed form
+above. \texttt{evaluate\_population\_self\_consistent}/
+\texttt{build\_self\_consistent\_targeted\_samples}/
+\texttt{build\_self\_consistent\_population\_target\_grid} are
+the same idea, with two real problems this surfaced and fixed. First,
+$\bar{Z}$ has no closed form once yield depends on the evolving $Z(t)$
+itself, so the exact-targeting trick above becomes numerical bisection
+over \texttt{yield\_scatter} instead of algebra -- monotonic in its effect on
+$\bar{Z}$, so bisection converges reliably. Second, the self-consistent
+evaluation measured $\sim$300x slower per call than the closed form
+(RK4-stepping through the enrichment history vs. one formula, $\sim$53ms
+vs. $\sim$0.17ms) -- addressed by a coarser step grid (30 steps instead
+of 200; checked directly, $<$5\% deviation, negligible next to the
+35--70\% astrophysical scatter Section~\ref{sec:metal-yield} already
+models) and by vectorizing the RK4 stepper across many points' bisection
+trials at once instead of one Python-level call per point -- together,
+$\sim$100x faster, confirmed by direct benchmark. AGE-targeting was also
+added (an improvement over the closed-box version's "down to luck"
+limitation): a large, cheap candidate pool (checking a shape's age needs
+no ODE integration, only the SFH reconstruction) is kept to whichever
+points are CLOSEST to the target age, rather than accepted within a fixed
+window (which inherits any local asymmetry in the shape prior's own age
+distribution) -- verified directly on the three representative literature
+targets (thin disc, halo, massive elliptical): metallicity lands within
+$<$1\% of target in every case, age within $\lesssim$1 Gyr, with the pool
+size growing automatically for genuinely rare target ages (checked on the
+12~Gyr halo case: closing the age bias from $-0.47$ to $-0.01$~Gyr needed
+growing the pool from 4,000 to 60,000 candidates, still under 10 seconds).
+Reachability is checked BEFORE nearest-in-age selection, not after --
+checking in the other order under-fills the requested batch size
+unpredictably.
+
 \subsubsection{Initial Mass Function} \label{sec:imf}
 The full theory of a time-varying, galaxy-wide stellar initial mass
 function (the Integrated Galaxy-wide IMF, IGIMF: \citealt{KroupaWeidner2003};

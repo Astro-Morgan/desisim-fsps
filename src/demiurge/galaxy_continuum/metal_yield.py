@@ -250,30 +250,42 @@ def _pchip_eval(x_query: np.ndarray, x: np.ndarray, y: np.ndarray, slopes: np.nd
     return h00 * y[idx] + h10 * h_i * slopes[idx] + h01 * y[idx + 1] + h11 * h_i * slopes[idx + 1]
 
 
-def yield_mean(z_absolute: float) -> float:
+def yield_mean(z_absolute):
     """The central yield(Z) curve: a monotone PCHIP spline through the 4
     real anchor points, held flat for [Fe/H] outside [-3, 0] (L&C18's own
-    real coverage -- clipped, not extrapolated, in `_pchip_eval` above)."""
+    real coverage -- clipped, not extrapolated, in `_pchip_eval` above).
+    Scalar in, scalar out; array in, array out (added 2026-09-17 so
+    `integrate_self_consistent_z_batch` below can call this once across
+    many points per RK4 step instead of once per point -- verified
+    bit-for-bit identical to looping the scalar path, see
+    tests/galaxy_continuum/test_metal_yield.py)."""
+    scalar_input = np.ndim(z_absolute) == 0
     feh = _feh_of(z_absolute)
-    return float(_pchip_eval(np.atleast_1d(feh), _ANCHOR_FEH, _ANCHOR_YIELD_AT_FEH, _ANCHOR_SLOPES)[0])
+    result = _pchip_eval(np.atleast_1d(feh), _ANCHOR_FEH, _ANCHOR_YIELD_AT_FEH, _ANCHOR_SLOPES)
+    return float(result[0]) if scalar_input else result
 
 
-def yield_sigma_relative(z_absolute: float) -> float:
+def yield_sigma_relative(z_absolute):
     """Coverage-dependent relative scatter width (PI direction, 2026-09-16):
     smaller inside L&C18's real [Fe/H] in [-3,0] coverage, larger outside
-    (pure extrapolation, no real per-mass data there at all)."""
+    (pure extrapolation, no real per-mass data there at all). Scalar/array
+    in, matching out -- see `yield_mean`'s docstring."""
+    scalar_input = np.ndim(z_absolute) == 0
     feh = _feh_of(z_absolute)
     inside = (feh >= _FEH_COVERAGE_LOW) & (feh <= _FEH_COVERAGE_HIGH)
-    return float(_SIGMA_REL_INSIDE if inside else _SIGMA_REL_OUTSIDE)
+    result = np.where(inside, _SIGMA_REL_INSIDE, _SIGMA_REL_OUTSIDE)
+    return float(result) if scalar_input else result
 
 
-def effective_yield_at_z(z_absolute: float, yield_scatter: float) -> float:
+def effective_yield_at_z(z_absolute, yield_scatter):
     """`yield_mean(Z) * (1 + yield_sigma_relative(Z) * yield_scatter)`,
     floored at `_YIELD_FLOOR_FRACTION` of the mean so no real `yield_scatter`
-    draw can push the effective yield to zero or negative."""
+    draw can push the effective yield to zero or negative. Scalar/array in,
+    matching out."""
     mean = yield_mean(z_absolute)
     raw = mean * (1.0 + yield_sigma_relative(z_absolute) * yield_scatter)
-    return max(raw, _YIELD_FLOOR_FRACTION * mean)
+    floor = _YIELD_FLOOR_FRACTION * mean
+    return max(raw, floor) if np.ndim(z_absolute) == 0 else np.maximum(raw, floor)
 
 
 def integrate_self_consistent_z(
@@ -306,6 +318,56 @@ def integrate_self_consistent_z(
         k3 = rhs(mu0 + 0.5 * h, z[i] + 0.5 * h * k2)
         k4 = rhs(mu1, z[i] + h * k3)
         z[i + 1] = max(z[i] + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4), 0.0)
+
+    return z
+
+
+def integrate_self_consistent_z_batch(mu_grid_batch: np.ndarray, yield_scatter_batch: np.ndarray) -> np.ndarray:
+    """Vectorized sibling of `integrate_self_consistent_z` -- same RK4
+    scheme, but stepping ALL rows of `mu_grid_batch` (shape (n_points,
+    n_grid), each row one point's own mu(t) trajectory) forward together,
+    one vectorized `effective_yield_at_z` call per time-step instead of
+    one Python-level call per (point, step) pair. `yield_scatter_batch`
+    has shape (n_points,). Returns the FULL Z trajectory, shape
+    (n_points, n_grid) -- matching `integrate_self_consistent_z`'s own
+    return convention (every grid point, not just the endpoint):
+    `population_inversion.py` needs the whole trajectory to compute the
+    mass-weighted integral (`Z_bar = integral Z dF`), NOT just `Z(t_obs)`
+    -- an earlier version of this function returned only the endpoint,
+    which is a genuinely different (and here, wrong) quantity, the same
+    Z(t_obs)-vs-mass-weighted-Z confusion this project already found and
+    fixed once (see `mass_weighted_z_closed_form`'s docstring) -- caught
+    before it shipped, not after.
+
+    Added 2026-09-17 -- real numbers motivated this (Andy: "~1m per draw
+    is too slow"): the self-consistent model is ~300x slower per call than
+    the old closed-box relation (a real, measured cost of the RK4 stepping
+    itself, not the physics), so building a batch of targeted samples
+    needs this to stay practical. Verified bit-for-bit identical to
+    looping `integrate_self_consistent_z` per row before being trusted
+    (see tests/galaxy_continuum/test_metal_yield.py) -- this is the exact
+    same arithmetic, just batched, not an approximation.
+    """
+    mu_grid_batch = np.asarray(mu_grid_batch, dtype=float)
+    yield_scatter_batch = np.asarray(yield_scatter_batch, dtype=float)
+    n_points, n_grid = mu_grid_batch.shape
+    z = np.zeros((n_points, n_grid))
+
+    def rhs(mu_vec, z_vec):
+        safe_mu = np.where(mu_vec > 0.0, mu_vec, 1.0)
+        val = -effective_yield_at_z(np.maximum(z_vec, 0.0), yield_scatter_batch) / safe_mu
+        return np.where(mu_vec > 0.0, val, 0.0)
+
+    for i in range(n_grid - 1):
+        mu0 = mu_grid_batch[:, i]
+        mu1 = mu_grid_batch[:, i + 1]
+        h = mu1 - mu0
+        z_i = z[:, i]
+        k1 = rhs(mu0, z_i)
+        k2 = rhs(mu0 + 0.5 * h, z_i + 0.5 * h * k1)
+        k3 = rhs(mu0 + 0.5 * h, z_i + 0.5 * h * k2)
+        k4 = rhs(mu1, z_i + h * k3)
+        z[:, i + 1] = np.maximum(z_i + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4), 0.0)
 
     return z
 
